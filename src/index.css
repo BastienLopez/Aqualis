@@ -1,0 +1,138 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 240 10% 6%;
+    --foreground: 0 0% 95%;
+
+    --card: 240 8% 10%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 240 8% 10%;
+    --popover-foreground: 0 0% 95%;
+
+    --primary: 32 70% 55%;
+    --primary-foreground: 240 10% 6%;
+
+    --secondary: 240 6% 14%;
+    --secondary-foreground: 0 0% 85%;
+
+    --muted: 240 6% 16%;
+    --muted-foreground: 0 0% 50%;
+
+    --accent: 174 60% 45%;
+    --accent-foreground: 240 10% 6%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 240 6% 16%;
+    --input: 240 6% 18%;
+    --ring: 32 70% 55%;
+
+    --radius: 1.25rem;
+
+    /* AquaFocus Premium Tokens */
+    --gold: 38 85% 58%;
+    --gold-foreground: 240 10% 6%;
+    
+    /* Warm card gradients (like reference) */
+    --card-warm-from: 25 50% 22%;
+    --card-warm-to: 15 40% 14%;
+    --card-cool-from: 210 40% 15%;
+    --card-cool-to: 220 35% 10%;
+    
+    --glass: 240 8% 12%;
+    --glass-border: 240 6% 20%;
+    
+    --ocean-deep: 220 50% 4%;
+    --ocean-mid: 200 60% 12%;
+    
+    --rarity-common: 0 0% 55%;
+    --rarity-rare: 210 80% 60%;
+    --rarity-epic: 270 70% 60%;
+    --rarity-legendary: 38 90% 55%;
+
+    --sidebar-background: 240 8% 8%;
+    --sidebar-foreground: 0 0% 90%;
+    --sidebar-primary: 174 60% 45%;
+    --sidebar-primary-foreground: 240 10% 6%;
+    --sidebar-accent: 240 6% 14%;
+    --sidebar-accent-foreground: 0 0% 90%;
+    --sidebar-border: 240 6% 16%;
+    --sidebar-ring: 174 60% 45%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+@layer utilities {
+  .glass {
+    background: hsl(var(--glass) / 0.55);
+    backdrop-filter: blur(24px);
+    -webkit-backdrop-filter: blur(24px);
+    border: 1px solid hsl(var(--glass-border) / 0.3);
+  }
+  .glass-strong {
+    background: hsl(var(--glass) / 0.85);
+    backdrop-filter: blur(40px);
+    -webkit-backdrop-filter: blur(40px);
+    border: 1px solid hsl(var(--glass-border) / 0.4);
+  }
+  .glass-nav {
+    background: hsl(240 8% 14% / 0.7);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    border: 1px solid hsl(var(--glass-border) / 0.25);
+  }
+  .card-warm {
+    background: linear-gradient(145deg, hsl(var(--card-warm-from)) 0%, hsl(var(--card-warm-to)) 100%);
+    border: 1px solid hsl(30 30% 20% / 0.5);
+  }
+  .card-cool {
+    background: linear-gradient(145deg, hsl(var(--card-cool-from)) 0%, hsl(var(--card-cool-to)) 100%);
+    border: 1px solid hsl(210 20% 18% / 0.5);
+  }
+  .card-dark {
+    background: hsl(240 8% 11%);
+    border: 1px solid hsl(var(--glass-border) / 0.3);
+  }
+  .text-gold {
+    color: hsl(var(--gold));
+  }
+  .bg-gold {
+    background-color: hsl(var(--gold));
+  }
+  .gradient-warm {
+    background: linear-gradient(180deg, hsl(30 40% 18%) 0%, hsl(20 30% 10%) 100%);
+  }
+  .gradient-dark-bottom {
+    background: linear-gradient(to top, hsl(var(--background)) 0%, transparent 100%);
+  }
+  .badge-common { background: hsl(var(--rarity-common) / 0.15); color: hsl(var(--rarity-common)); }
+  .badge-rare { background: hsl(var(--rarity-rare) / 0.15); color: hsl(var(--rarity-rare)); }
+  .badge-epic { background: hsl(var(--rarity-epic) / 0.15); color: hsl(var(--rarity-epic)); }
+  .badge-legendary { background: hsl(var(--rarity-legendary) / 0.12); color: hsl(var(--rarity-legendary)); }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .glow-gold {
+    box-shadow: 0 0 30px hsl(var(--gold) / 0.15), 0 0 80px hsl(var(--gold) / 0.05);
+  }
+  .glow-cyan {
+    box-shadow: 0 0 20px hsl(var(--accent) / 0.25), 0 0 60px hsl(var(--accent) / 0.08);
+  }
+}

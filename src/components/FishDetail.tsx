@@ -86,7 +86,7 @@ export default function FishDetail({
         {/* Back button */}
         <button
           onClick={onClose}
-          className="fixed top-12 left-5 z-50 w-10 h-10 rounded-full card-dark flex items-center justify-center"
+          className="fixed top-[10px] left-5 z-50 w-10 h-10 rounded-full card-dark flex items-center justify-center"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="text-foreground">
             <path d="M15 18l-6-6 6-6"/>
@@ -94,10 +94,10 @@ export default function FishDetail({
         </button>
 
         {/* Hero image */}
-        <div className="relative h-[42vh] overflow-hidden">
+        <div className="relative h-[40vh] overflow-hidden">
           <div className="absolute inset-0 bg-gradient-to-b from-card/50 via-card/30 to-background" />
           <motion.div
-            className="absolute right-[-12%] top-[8%] w-[80%] h-[85%]"
+            className="absolute right-[-8%] top-[10%] w-[70%] h-[75%]"
             initial={{ x: 40, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             transition={{ duration: 0.5, ease: "easeOut" }}
@@ -127,7 +127,7 @@ export default function FishDetail({
         </div>
 
         {/* Content */}
-        <div className="px-5 pb-8 -mt-2">
+        <div className="px-5 pb-8 pt-2">
           <p className="text-[13px] text-muted-foreground leading-relaxed mb-6">{fish.description}</p>
 
           <div className="flex items-center justify-between mb-3">

@@ -94,7 +94,7 @@
     border: 1px solid hsl(var(--glass-border) / 0.4);
   }
   .glass-nav {
-    background: hsl(240 8% 14% / 0.7);
+    background: hsl(200 20% 10% / 0.5);
     backdrop-filter: blur(30px);
     -webkit-backdrop-filter: blur(30px);
     border: 1px solid hsl(var(--glass-border) / 0.25);

@@ -34,6 +34,28 @@ import aquariumPandemoniumMobile from "@/assets/aquarium-pandemonium-mobile.jpg"
 
 export type Rarity = "common" | "rare" | "epic" | "legendary";
 export type ActivityType = "work" | "study" | "sport" | "custom";
+export type FishGender = "male" | "female";
+export type GeneticTrait = "color" | "pattern" | "size" | "speed";
+
+export interface Achievement {
+  id: string;
+  title: string;
+  description: string;
+  emoji: string;
+}
+
+export const ACHIEVEMENTS: Achievement[] = [
+  { id: "first_fish", title: "Premier Habitant", description: "Acheter ton premier poisson", emoji: "🐠" },
+  { id: "first_session", title: "Premier Effort", description: "Terminer ta première session", emoji: "⏱️" },
+  { id: "legend_owned", title: "Légende Vivante", description: "Posséder un poisson légendaire", emoji: "⭐" },
+  { id: "feed_10", title: "Nourricier", description: "Nourrir les poissons 10 fois", emoji: "🍴" },
+  { id: "feed_100", title: "Chef Cuisinier", description: "Nourrir 100 fois", emoji: "👨‍🍳" },
+  { id: "sessions_10", title: "Assidu", description: "10 sessions complétées", emoji: "🏆" },
+  { id: "one_hour", title: "Heure de Gloire", description: "Session d’ 1 heure ou plus", emoji: "⏰" },
+  { id: "collector", title: "Collectionneur", description: "Posséder 5 espèces différentes", emoji: "🎯" },
+  { id: "aquarium_2", title: "Explorateur", description: "Posséder 2 aquariums", emoji: "🏔️" },
+  { id: "breeder", title: "Éleveur", description: "Premier bébé poisson né", emoji: "🐣" },
+];
 
 export interface Fish {
   id: string;
@@ -49,6 +71,49 @@ export interface Fish {
   diet: string;
   swimSpeed?: "slow" | "normal" | "fast";
   behavior?: "solitary" | "curious" | "schooling";
+  canBreed?: boolean;
+  breedingLevel?: number;
+  lifespan?: number; // in days
+  specialEffect?: "sparkles" | "glow" | "trail" | "aura";
+}
+
+export interface FishInstance {
+  instanceId: string;
+  fishId: string;
+  gender: FishGender;
+  age: number; // in days
+  genetics: {
+    color: number; // 0-100
+    pattern: number;
+    size: number;
+    speed: number;
+  };
+  isBaby: boolean;
+  birthDate: string;
+  parents?: { mother: string; father: string };
+}
+
+export interface BreedingPair {
+  id: string;
+  motherId: string;
+  fatherId: string;
+  status: "courting" | "breeding" | "egg";
+  startDate: string;
+  eggLaidDate?: string;
+  hatchDate?: string;
+}
+
+export interface Quest {
+  id: string;
+  title: string;
+  description: string;
+  emoji?: string;
+  type: "daily" | "weekly" | "achievement";
+  requirement: number;
+  progress: number;
+  reward: { gold?: number; xp?: number; fish?: string };
+  completed: boolean;
+  expiresAt?: string;
 }
 
 export interface AquariumTheme {
@@ -156,6 +221,7 @@ export const FISH_CATALOG: Fish[] = [
     diet: "Omnivore",
     swimSpeed: "slow",
     behavior: "curious",
+    specialEffect: "sparkles",
   },
   // Épiques
   {
@@ -203,6 +269,10 @@ export const FISH_CATALOG: Fish[] = [
     diet: "Carnivore",
     swimSpeed: "slow",
     behavior: "solitary",
+    canBreed: true,
+    breedingLevel: 8,
+    lifespan: 90,
+    specialEffect: "trail",
   },
   {
     id: "seahorse",
@@ -218,6 +288,10 @@ export const FISH_CATALOG: Fish[] = [
     diet: "Carnivore",
     swimSpeed: "slow",
     behavior: "curious",
+    canBreed: true,
+    breedingLevel: 10,
+    lifespan: 120,
+    specialEffect: "glow",
   },
   {
     id: "jellyfish",
@@ -233,6 +307,10 @@ export const FISH_CATALOG: Fish[] = [
     diet: "Carnivore",
     swimSpeed: "slow",
     behavior: "solitary",
+    canBreed: true,
+    breedingLevel: 12,
+    lifespan: 180,
+    specialEffect: "aura",
   },
 ];
 
@@ -308,4 +386,313 @@ export function calculateGoldReward(minutes: number, isSport: boolean, isFirstOf
   if (isSport) gold = Math.round(gold * 1.1);
   if (isFirstOfDay) gold = Math.round(gold * 1.2);
   return gold;
+}
+
+// Daily Quests Generation - 50 total quests, 3 active at a time
+export function generateDailyQuests(date: string): Quest[] {
+  const seed = new Date(date).getDate();
+  
+  const questTemplates = [
+    // ── FOCUS & SESSIONS (20) ────────────────────────────────────────────────
+    {
+      id: "session-20", title: "Premier plongeon", emoji: "🌊",
+      description: "Complète une session de 20 min",
+      requirement: 1, reward: { gold: 30, xp: 20 }
+    },
+    {
+      id: "session-45", title: "Zone de flow", emoji: "⚡",
+      description: "Complète une session de 45 min sans pause",
+      requirement: 1, reward: { gold: 75, xp: 45 }
+    },
+    {
+      id: "session-60", title: "L'heure dorée", emoji: "🏅",
+      description: "Tiens une session complète d'1 heure",
+      requirement: 1, reward: { gold: 120, xp: 60 }
+    },
+    {
+      id: "session-90", title: "Endurance mentale", emoji: "🔥",
+      description: "90 minutes de concentration pure",
+      requirement: 1, reward: { gold: 180, xp: 90 }
+    },
+    {
+      id: "session-120", title: "Bloc de travail profond", emoji: "🧠",
+      description: "Complète une session de 2 heures",
+      requirement: 1, reward: { gold: 250, xp: 120 }
+    },
+    {
+      id: "session-early", title: "5h du matin club", emoji: "🌅",
+      description: "Lance une session avant 9h du matin",
+      requirement: 1, reward: { gold: 100, xp: 35 }
+    },
+    {
+      id: "session-night", title: "Noctambule", emoji: "🌙",
+      description: "Lance une session après 22h",
+      requirement: 1, reward: { gold: 100, xp: 35 }
+    },
+    {
+      id: "session-noon", title: "Sprint de midi", emoji: "☀️",
+      description: "Session entre 12h et 14h",
+      requirement: 1, reward: { gold: 60, xp: 25 }
+    },
+    {
+      id: "session-3x", title: "La trilogie", emoji: "🎯",
+      description: "Complète 3 sessions dans la journée",
+      requirement: 3, reward: { gold: 200, xp: 80 }
+    },
+    {
+      id: "session-5x", title: "Hyperproductif", emoji: "💪",
+      description: "5 sessions en une seule journée",
+      requirement: 5, reward: { gold: 350, xp: 150 }
+    },
+    {
+      id: "total-time-120", title: "2h cumulées", emoji: "⏱️",
+      description: "Accumule 2h de sessions aujourd'hui",
+      requirement: 120, reward: { gold: 160, xp: 80 }
+    },
+    {
+      id: "total-time-240", title: "Demi-journée de focus", emoji: "🏆",
+      description: "4h de sessions au total aujourd'hui",
+      requirement: 240, reward: { gold: 300, xp: 160 }
+    },
+    {
+      id: "session-sport", title: "Corps & esprit", emoji: "🏃",
+      description: "Complète une session Sport de 30min+",
+      requirement: 1, reward: { gold: 130, xp: 45 }
+    },
+    {
+      id: "session-study", title: "Étudiant acharné", emoji: "📚",
+      description: "Session Étude de 60min+ en une fois",
+      requirement: 1, reward: { gold: 130, xp: 60 }
+    },
+    {
+      id: "session-work", title: "Mode professionnel", emoji: "💼",
+      description: "Session Travail de 45min+",
+      requirement: 1, reward: { gold: 110, xp: 50 }
+    },
+    {
+      id: "session-meditation", title: "Pleine conscience", emoji: "🧘",
+      description: "Session Méditation de 20min+",
+      requirement: 1, reward: { gold: 80, xp: 30 }
+    },
+    {
+      id: "session-creative", title: "Élan créatif", emoji: "🎨",
+      description: "Session Créativité de 30min+",
+      requirement: 1, reward: { gold: 90, xp: 40 }
+    },
+    {
+      id: "streak-2", title: "Deux jours de suite", emoji: "🔗",
+      description: "Fais une session 2 jours consécutifs",
+      requirement: 2, reward: { gold: 150, xp: 60 }
+    },
+    {
+      id: "streak-5", title: "Semaine solide", emoji: "⭐",
+      description: "5 jours consécutifs avec au moins 1 session",
+      requirement: 5, reward: { gold: 400, xp: 200 }
+    },
+    {
+      id: "no-break-60", title: "Sans interruption", emoji: "🚫",
+      description: "60 min sans quitter la session",
+      requirement: 1, reward: { gold: 140, xp: 70 }
+    },
+
+    // ── ALIMENTATION (8) ─────────────────────────────────────────────────────
+    {
+      id: "feed-morning", title: "Petit-déjeuner aquatique", emoji: "🌤️",
+      description: "Nourris tes poissons avant 10h",
+      requirement: 1, reward: { gold: 50, xp: 15 }
+    },
+    {
+      id: "feed-evening", title: "Dîner royal", emoji: "🍽️",
+      description: "Nourris tes poissons entre 18h et 21h",
+      requirement: 1, reward: { gold: 50, xp: 15 }
+    },
+    {
+      id: "feed-3x", title: "Trois repas par jour", emoji: "🥗",
+      description: "Nourris 3 fois dans la même journée",
+      requirement: 3, reward: { gold: 90, xp: 30 }
+    },
+    {
+      id: "feed-5x", title: "Aquarium 5 étoiles", emoji: "⭐",
+      description: "Nourris 5 fois aujourd'hui",
+      requirement: 5, reward: { gold: 130, xp: 50 }
+    },
+    {
+      id: "feed-10x", title: "Chef cuisinier", emoji: "👨‍🍳",
+      description: "Nourris 10 fois au total",
+      requirement: 10, reward: { gold: 200, xp: 80 }
+    },
+    {
+      id: "feed-after-session", title: "Récompense méritée", emoji: "🎁",
+      description: "Nourris juste après avoir complété une session",
+      requirement: 1, reward: { gold: 70, xp: 25 }
+    },
+    {
+      id: "feed-full-tank", title: "Grande tablée", emoji: "🦈",
+      description: "Nourris avec 5+ poissons dans ton aquarium",
+      requirement: 1, reward: { gold: 80, xp: 30 }
+    },
+    {
+      id: "feed-3-days", title: "Routine bien nourrie", emoji: "📅",
+      description: "Nourris au moins une fois 3 jours de suite",
+      requirement: 3, reward: { gold: 160, xp: 60 }
+    },
+
+    // ── COLLECTION & POISSONS (10) ────────────────────────────────────────────
+    {
+      id: "own-3-species", title: "Trio aquatique", emoji: "🐟",
+      description: "Possède 3 espèces différentes",
+      requirement: 3, reward: { gold: 100, xp: 40 }
+    },
+    {
+      id: "own-5-species", title: "Petit aquarium", emoji: "🏊",
+      description: "Possède 5 espèces différentes",
+      requirement: 5, reward: { gold: 200, xp: 80 }
+    },
+    {
+      id: "own-8-species", title: "Collectionneur sérieux", emoji: "🎖️",
+      description: "Possède 8 espèces dans ton aquarium",
+      requirement: 8, reward: { gold: 350, xp: 140 }
+    },
+    {
+      id: "buy-rare", title: "Pêche rare", emoji: "💎",
+      description: "Acquiers un poisson de rareté Rare ou supérieure",
+      requirement: 1, reward: { gold: 160, xp: 55 }
+    },
+    {
+      id: "buy-epic", title: "Trésor épique", emoji: "🔮",
+      description: "Acquiers un poisson de rareté Épique",
+      requirement: 1, reward: { gold: 320, xp: 110 }
+    },
+    {
+      id: "buy-legendary", title: "La perle rare", emoji: "👑",
+      description: "Acquiers un poisson Légendaire",
+      requirement: 1, reward: { gold: 600, xp: 200 }
+    },
+    {
+      id: "full-tank", title: "Aquarium complet", emoji: "🌊",
+      description: "Remplis ton aquarium à 10 poissons",
+      requirement: 10, reward: { gold: 450, xp: 180 }
+    },
+    {
+      id: "breed-once", title: "Bébé poisson !", emoji: "🐣",
+      description: "Fais naître un bébé poisson par reproduction",
+      requirement: 1, reward: { gold: 250, xp: 100 }
+    },
+    {
+      id: "click-fish-20", title: "Tu me chatouilles !", emoji: "😄",
+      description: "Clique sur tes poissons 20 fois",
+      requirement: 20, reward: { gold: 60, xp: 25 }
+    },
+    {
+      id: "click-fish-50", title: "Grand câlin marin", emoji: "🤗",
+      description: "Clique sur tes poissons 50 fois",
+      requirement: 50, reward: { gold: 120, xp: 50 }
+    },
+
+    // ── OR & PROGRESSION (7) ─────────────────────────────────────────────────
+    {
+      id: "earn-200", title: "Premiers lingots", emoji: "🪙",
+      description: "Gagne 200 or en sessions",
+      requirement: 200, reward: { xp: 40 }
+    },
+    {
+      id: "earn-500", title: "Trésorier", emoji: "💰",
+      description: "Gagne 500 or en sessions",
+      requirement: 500, reward: { xp: 80 }
+    },
+    {
+      id: "earn-1500", title: "Fort en or", emoji: "🏦",
+      description: "Accumule 1500 or en sessions",
+      requirement: 1500, reward: { xp: 200 }
+    },
+    {
+      id: "save-1000", title: "Épargnant malin", emoji: "🏧",
+      description: "Atteins 1000 or d'économies",
+      requirement: 1000, reward: { xp: 120 }
+    },
+    {
+      id: "level-3", title: "Montée en puissance", emoji: "📈",
+      description: "Atteins le niveau 3",
+      requirement: 3, reward: { gold: 100, xp: 30 }
+    },
+    {
+      id: "level-7", title: "Aquanaute confirmé", emoji: "🎓",
+      description: "Atteins le niveau 7",
+      requirement: 7, reward: { gold: 250, xp: 80 }
+    },
+    {
+      id: "level-15", title: "Maître des profondeurs", emoji: "🌊",
+      description: "Atteins le niveau 15",
+      requirement: 15, reward: { gold: 500, xp: 200 }
+    },
+
+    // ── EXPLORATION & DÉCOUVERTE (5) ─────────────────────────────────────────
+    {
+      id: "explore-settings", title: "Personnalise ton monde", emoji: "⚙️",
+      description: "Ouvre les paramètres et change une option",
+      requirement: 1, reward: { gold: 40, xp: 15 }
+    },
+    {
+      id: "switch-aquarium", title: "Changement de décor", emoji: "🎭",
+      description: "Change d'aquarium actif",
+      requirement: 1, reward: { gold: 60, xp: 20 }
+    },
+    {
+      id: "buy-new-aquarium", title: "Nouveau territoire", emoji: "🏰",
+      description: "Achète un nouvel aquarium",
+      requirement: 1, reward: { gold: 350, xp: 120 }
+    },
+    {
+      id: "watch-10min", title: "Contemplation marine", emoji: "👁️",
+      description: "Observe ton aquarium pendant 10 minutes",
+      requirement: 600, reward: { gold: 80, xp: 35 }
+    },
+    {
+      id: "watch-20min", title: "Méditation profonde", emoji: "🧘",
+      description: "Reste dans l'aquarium 20 minutes sans session",
+      requirement: 1200, reward: { gold: 150, xp: 65 }
+    },
+  ];
+  
+  // Select 3 quests based on seed rotation
+  const availableQuests = questTemplates
+    .sort((a, b) => (a.id.charCodeAt(0) + seed) - (b.id.charCodeAt(0) + seed))
+    .slice(0, 3)
+    .map((template, index) => ({
+      ...template,
+      id: `quest-${date}-${template.id}-${index}`,
+      type: "daily" as const,
+      progress: 0,
+      completed: false,
+      expiresAt: new Date(new Date(date).getTime() + 24 * 60 * 60 * 1000).toISOString(),
+    }));
+  
+  return availableQuests;
+}
+
+// Breeding system helpers
+export function canBreedFish(fish1: FishInstance, fish2: FishInstance): boolean {
+  if (fish1.fishId !== fish2.fishId) return false; // Same species only
+  if (fish1.gender === fish2.gender) return false; // Different genders
+  if (fish1.isBaby || fish2.isBaby) return false; // Adults only
+  if (fish1.age < 7 || fish2.age < 7) return false; // Min 7 days old
+  return true;
+}
+
+export function generateBabyFish(mother: FishInstance, father: FishInstance): FishInstance {
+  return {
+    instanceId: `baby-${Date.now()}-${Math.random()}`,
+    fishId: mother.fishId,
+    gender: Math.random() < 0.5 ? "male" : "female",
+    age: 0,
+    genetics: {
+      color: (mother.genetics.color + father.genetics.color) / 2 + (Math.random() - 0.5) * 20,
+      pattern: (mother.genetics.pattern + father.genetics.pattern) / 2 + (Math.random() - 0.5) * 20,
+      size: (mother.genetics.size + father.genetics.size) / 2 + (Math.random() - 0.5) * 20,
+      speed: (mother.genetics.speed + father.genetics.speed) / 2 + (Math.random() - 0.5) * 20,
+    },
+    isBaby: true,
+    birthDate: new Date().toISOString(),
+    parents: { mother: mother.instanceId, father: father.instanceId },
+  };
 }

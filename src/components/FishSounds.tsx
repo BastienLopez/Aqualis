@@ -16,7 +16,7 @@ export default function FishSounds({ fishCount, volume = 0.15, fishXPositions = 
     }
 
     const ctx = audioContextRef.current;
-    let activeNodes: AudioNode[] = [];
+    const activeNodes: AudioNode[] = [];
     let isMounted = true;
 
     /** Pick a random fish's X position and convert to stereo pan -1..1 */
@@ -54,7 +54,7 @@ export default function FishSounds({ fishCount, volume = 0.15, fishXPositions = 
       connectSpatial(oscillator, gainNode);
       oscillator.start(ctx.currentTime);
       oscillator.stop(ctx.currentTime + 0.15);
-      setTimeout(() => { try { oscillator.disconnect(); gainNode.disconnect(); } catch (_) {} }, 200);
+      setTimeout(() => { try { oscillator.disconnect(); gainNode.disconnect(); } catch (_e) { /* ignore */ } }, 200);
     };
 
     const playSwimSound = () => {
@@ -69,7 +69,7 @@ export default function FishSounds({ fishCount, volume = 0.15, fishXPositions = 
       connectSpatial(oscillator, gainNode);
       oscillator.start(ctx.currentTime);
       oscillator.stop(ctx.currentTime + 0.2);
-      setTimeout(() => { try { oscillator.disconnect(); gainNode.disconnect(); } catch (_) {} }, 250);
+      setTimeout(() => { try { oscillator.disconnect(); gainNode.disconnect(); } catch (_e) { /* ignore */ } }, 250);
     };
 
     const soundInterval = setInterval(() => {
@@ -82,7 +82,7 @@ export default function FishSounds({ fishCount, volume = 0.15, fishXPositions = 
     return () => {
       isMounted = false;
       clearInterval(soundInterval);
-      activeNodes.forEach(node => { try { node.disconnect(); } catch (_) {} });
+      activeNodes.forEach(node => { try { node.disconnect(); } catch (_e) { /* ignore */ } });
     };
   }, [fishCount, volume, fishXPositions]);
 

@@ -18,9 +18,9 @@ export default function ASMRSounds({ enabled, volume = 0.4, isRaining = false, i
     }
 
     const ctx = audioContextRef.current;
-    let activeNodes: (OscillatorNode | GainNode)[] = [];
+    const activeNodes: (OscillatorNode | GainNode)[] = [];
     let isMounted = true;
-    let intervals: number[] = [];
+    const intervals: number[] = [];
 
     // Bubble pop sound (softer for ASMR)
     const playBubblePop = () => {
@@ -163,7 +163,7 @@ export default function ASMRSounds({ enabled, volume = 0.4, isRaining = false, i
   useEffect(() => {
     if (!isRaining) return;
     let ctx: AudioContext;
-    let intervals: number[] = [];
+    const intervals: number[] = [];
     let isMounted = true;
     try {
       ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -179,13 +179,13 @@ export default function ASMRSounds({ enabled, volume = 0.4, isRaining = false, i
       g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
       osc.connect(g); g.connect(ctx.destination);
       osc.start(); osc.stop(ctx.currentTime + 0.09);
-      setTimeout(() => { try { osc.disconnect(); g.disconnect(); } catch {} }, 120);
+      setTimeout(() => { try { osc.disconnect(); g.disconnect(); } catch { /* ignore */ } }, 120);
     };
     intervals.push(window.setInterval(() => { if (isMounted) playRainDrop(); }, 80 + Math.random() * 40));
     return () => {
       isMounted = false;
       intervals.forEach(id => clearInterval(id));
-      try { ctx.close(); } catch {}
+      try { ctx.close(); } catch { /* ignore */ }
     };
   }, [isRaining, volume]);
 
@@ -207,7 +207,7 @@ export default function ASMRSounds({ enabled, volume = 0.4, isRaining = false, i
     osc.connect(g); g.connect(ctx.destination);
     osc.start();
     return () => {
-      try { osc?.stop(); osc?.disconnect(); g?.disconnect(); ctx.close(); } catch {}
+      try { osc?.stop(); osc?.disconnect(); g?.disconnect(); ctx.close(); } catch { /* ignore */ }
     };
   }, [isNight, volume]);
 
@@ -244,7 +244,7 @@ export default function ASMRSounds({ enabled, volume = 0.4, isRaining = false, i
         osc1.disconnect(); osc2.disconnect(); osc3.disconnect();
         g1.disconnect(); g2.disconnect(); g3.disconnect();
         masterGain.disconnect(); ctx.close();
-      } catch {}
+      } catch { /* ignore */ }
     };
   }, [enabled, volume]);
 
@@ -253,7 +253,7 @@ export default function ASMRSounds({ enabled, volume = 0.4, isRaining = false, i
     if (!enabled) return;
     let ctx: AudioContext;
     let isMounted = true;
-    let intervals: number[] = [];
+    const intervals: number[] = [];
     try {
       ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     } catch { return; }
@@ -270,13 +270,13 @@ export default function ASMRSounds({ enabled, volume = 0.4, isRaining = false, i
       g.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.6);
       osc.connect(g); g.connect(ctx.destination);
       osc.start(); osc.stop(ctx.currentTime + 0.65);
-      setTimeout(() => { try { osc.disconnect(); g.disconnect(); } catch {} }, 700);
+      setTimeout(() => { try { osc.disconnect(); g.disconnect(); } catch { /* ignore */ } }, 700);
     };
     intervals.push(window.setInterval(() => { if (isMounted) playFilterWhirr(); }, 9000 + Math.round(Math.random() * 4000)));
     return () => {
       isMounted = false;
       intervals.forEach(id => clearInterval(id));
-      try { ctx.close(); } catch {}
+      try { ctx.close(); } catch { /* ignore */ }
     };
   }, [enabled, volume]);
 

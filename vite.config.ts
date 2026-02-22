@@ -4,7 +4,7 @@ import path from "path";
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => ({
-  base: mode === "production" ? "/aquarium_apk/" : "/",
+  base: mode === "production" ? "/Aqualis/" : "/",
   server: {
     host: "::",
     port: 8080,

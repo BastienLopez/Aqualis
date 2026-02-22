@@ -125,7 +125,7 @@ function loadState(): GameState {
       ) as Partial<GameState>;
       return { ...defaultState, ...clean };
     }
-  } catch {}
+  } catch { /* ignore malformed save data */ }
   return defaultState;
 }
 

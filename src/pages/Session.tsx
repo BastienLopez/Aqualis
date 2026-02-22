@@ -127,7 +127,7 @@ export default function Session() {
           finishSession(data.activity, data.durationMinutes);
         }
       }
-    } catch {}
+    } catch { /* ignore storage read errors */ }
     return () => { if (quoteRef.current) clearInterval(quoteRef.current); };
   }, [finishSession]);
 

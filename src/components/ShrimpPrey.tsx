@@ -1,9 +1,10 @@
-import { motion } from "framer-motion";
-import { useMemo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { useMemo, useState, useEffect } from "react";
 
 interface ShrimpPreyProps {
   carnivorePositions?: { x: number; y: number }[];
   onShrimpCaught?: () => void;
+  nitrateLevel?: number; // when high, shrimps actively clean waste
 }
 
 const SHRIMP_COLORS = [
@@ -52,11 +53,29 @@ function ShrimpBody({ variant, fast }: { variant: number; fast?: boolean }) {
 // q = deterministic pseudo-random in [0,1]
 function q(seed: number) { return Math.abs(Math.sin(seed * 17.3 + 4.1)); }
 
-export default function ShrimpPrey({ carnivorePositions = [], onShrimpCaught: _onShrimpCaught }: ShrimpPreyProps) {
+export default function ShrimpPrey({ carnivorePositions = [], onShrimpCaught: _onShrimpCaught, nitrateLevel = 0 }: ShrimpPreyProps) {
+  const isCleaningMode = nitrateLevel > 20;
+
+  const [cleanBubbles, setCleanBubbles] = useState<{ id: number; x: number }[]>([]);
+  useEffect(() => {
+    if (!isCleaningMode) return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    const iv = setInterval(() => {
+      const x = 10 + Math.random() * 80;
+      const id = Date.now();
+      setCleanBubbles(prev => [...prev, { id, x }]);
+      // Track the timeout so we can clear it on unmount
+      timers.push(setTimeout(() => setCleanBubbles(prev => prev.filter(b => b.id !== id)), 1800));
+    }, 3500);
+    return () => {
+      clearInterval(iv);
+      timers.forEach(clearTimeout);
+    };
+  }, [isCleaningMode]);
   // 4 shrimps with deterministic starting params
   const shrimps = useMemo(() => Array.from({ length: 4 }, (_, i) => {
     const fromRight = i % 2 === 0;
-    const yPct   = 70 + q(i * 3.1) * 18;          // 70–88% from top
+    const yPct   = 70 + q(i * 3.1) * 18;          // 70ï¿½88% from top
     const bobAmp = 6  + q(i * 5.7) * 12;           // vertical bob amount in px
     const speed  = 8  + q(i * 2.9) * 10;           // seconds to cross tank
     const delay  = i  * 2.2;                         // stagger start
@@ -68,6 +87,19 @@ export default function ShrimpPrey({ carnivorePositions = [], onShrimpCaught: _o
 
   return (
     <div className="absolute inset-0 pointer-events-none z-[9]">
+      {/* ðŸ§¹ Cleaning bubble pops when shrimps eat waste */}
+      <AnimatePresence>
+        {cleanBubbles.map(b => (
+          <motion.div key={b.id} className="absolute pointer-events-none"
+            style={{ left: `${b.x}%`, bottom: "12%", fontSize: 10, color: "rgba(100,220,120,0.85)", fontWeight: 700, whiteSpace: "nowrap" }}
+            initial={{ opacity: 0, y: 0, scale: 0.7 }}
+            animate={{ opacity: [0, 1, 0.8, 0], y: [-0, -28], scale: [0.7, 1.1, 1] }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 1.6, ease: "easeOut" }}>
+            ðŸ§¹âœ¨
+          </motion.div>
+        ))}
+      </AnimatePresence>
       {shrimps.map((s) => {
         const startX  = s.fromRight ? "112%" : "-12%";
         const endX    = s.fromRight ? "-12%" : "112%";
@@ -110,7 +142,7 @@ export default function ShrimpPrey({ carnivorePositions = [], onShrimpCaught: _o
               width: 24, height: 4, borderRadius: "50%",
               background: "rgba(0,0,0,0.22)", filter: "blur(3px)",
             }} />
-            {/* Mirror based on travel direction — flip when reversing */}
+            {/* Mirror based on travel direction ï¿½ flip when reversing */}
             <motion.div
               animate={{ scaleX: [flipBase, flipBase, -flipBase, -flipBase, flipBase] }}
               transition={{
@@ -123,7 +155,9 @@ export default function ShrimpPrey({ carnivorePositions = [], onShrimpCaught: _o
               }}
               style={{
                 display: "inline-block",
-                filter: "drop-shadow(0 2px 5px rgba(0,0,0,0.5))",
+                filter: isCleaningMode
+                  ? "drop-shadow(0 2px 5px rgba(0,0,0,0.5)) drop-shadow(0 0 6px rgba(80,220,100,0.7))"
+                  : "drop-shadow(0 2px 5px rgba(0,0,0,0.5))",
               }}
             >
               <ShrimpBody variant={s.variant} fast={false} />

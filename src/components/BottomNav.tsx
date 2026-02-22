@@ -40,15 +40,15 @@ export default function BottomNav() {
         marginRight: '20px',
       }}
     >
-      <div className="mx-auto max-w-lg px-5 pb-2">
-        <div className="rounded-[28px] flex items-center justify-around py-3 px-2" style={{ background: 'transparent' }}>
+      <div className="mx-auto max-w-lg px-2 pb-2">
+        <div className="rounded-[28px] flex items-center justify-evenly py-2 px-1" style={{ background: 'transparent' }}>
           {tabs.map((tab) => {
             const isActive = location.pathname === tab.path;
             return (
               <button
                 key={tab.path}
                 onClick={() => navigate(tab.path)}
-                className="relative flex flex-col items-center gap-1 flex-1 py-1 min-w-0"
+                className="relative flex flex-col items-center gap-1 flex-1 py-2 min-w-0"
               >
                 {isActive && (
                   <motion.div

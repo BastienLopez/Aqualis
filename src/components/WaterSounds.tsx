@@ -61,19 +61,5 @@ export default function WaterSounds({ volume = 0.3 }: WaterSoundsProps) {
     setIsPlaying(false);
   };
 
-  return (
-    <motion.button
-      onClick={isPlaying ? stopSounds : startSounds}
-      className="fixed top-[5.5rem] right-4 glass-nav rounded-full p-3 z-40"
-      whileHover={{ scale: 1.1 }}
-      whileTap={{ scale: 0.95 }}
-      initial={{ opacity: 0, x: -20 }}
-      animate={{ opacity: 1, x: 0 }}
-      transition={{ delay: 0.7 }}
-    >
-      <div className="text-lg">
-        {isPlaying ? '🔊' : '🔇'}
-      </div>
-    </motion.button>
-  );
+  return null;
 }

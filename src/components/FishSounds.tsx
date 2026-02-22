@@ -3,9 +3,11 @@ import { useEffect, useRef } from "react";
 interface FishSoundsProps {
   fishCount: number;
   volume?: number;
+  /** X positions (0–100%) of each fish for stereo panning */
+  fishXPositions?: number[];
 }
 
-export default function FishSounds({ fishCount, volume = 0.15 }: FishSoundsProps) {
+export default function FishSounds({ fishCount, volume = 0.15, fishXPositions = [] }: FishSoundsProps) {
   const audioContextRef = useRef<AudioContext | null>(null);
 
   useEffect(() => {
@@ -14,105 +16,75 @@ export default function FishSounds({ fishCount, volume = 0.15 }: FishSoundsProps
     }
 
     const ctx = audioContextRef.current;
-    let activeNodes: (OscillatorNode | GainNode)[] = [];
+    let activeNodes: AudioNode[] = [];
     let isMounted = true;
+
+    /** Pick a random fish's X position and convert to stereo pan -1..1 */
+    const getPan = (): number => {
+      if (!fishXPositions.length) return 0;
+      const x = fishXPositions[Math.floor(Math.random() * fishXPositions.length)];
+      return Math.max(-1, Math.min(1, (x / 100) * 2 - 1));
+    };
+
+    /** Wire source → gain → optional StereoPanner → destination */
+    const connectSpatial = (source: AudioScheduledSourceNode, gain: GainNode) => {
+      const pan = getPan();
+      source.connect(gain);
+      if (pan !== 0 && typeof ctx.createStereoPanner === "function") {
+        const panner = ctx.createStereoPanner();
+        panner.pan.value = pan;
+        gain.connect(panner);
+        panner.connect(ctx.destination);
+        activeNodes.push(panner);
+      } else {
+        gain.connect(ctx.destination);
+      }
+      activeNodes.push(source, gain);
+    };
 
     const playBubbleSound = () => {
       if (!ctx || !isMounted) return;
-
       const oscillator = ctx.createOscillator();
       const gainNode = ctx.createGain();
-
-      // High-pitched bubble pop sound
       oscillator.type = "sine";
       oscillator.frequency.setValueAtTime(800 + Math.random() * 400, ctx.currentTime);
       oscillator.frequency.exponentialRampToValueAtTime(200, ctx.currentTime + 0.1);
-
       gainNode.gain.setValueAtTime(volume, ctx.currentTime);
       gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
-
-      oscillator.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
+      connectSpatial(oscillator, gainNode);
       oscillator.start(ctx.currentTime);
       oscillator.stop(ctx.currentTime + 0.15);
-
-      // Track nodes for cleanup
-      activeNodes.push(oscillator, gainNode);
-
-      // Auto cleanup after sound finishes
-      setTimeout(() => {
-        try {
-          oscillator.disconnect();
-          gainNode.disconnect();
-        } catch (e) {
-          // Already disconnected
-        }
-      }, 200);
+      setTimeout(() => { try { oscillator.disconnect(); gainNode.disconnect(); } catch (_) {} }, 200);
     };
 
     const playSwimSound = () => {
       if (!ctx || !isMounted) return;
-
       const oscillator = ctx.createOscillator();
       const gainNode = ctx.createGain();
-
-      // Gentle swoosh sound
       oscillator.type = "sine";
       oscillator.frequency.setValueAtTime(150 + Math.random() * 100, ctx.currentTime);
       oscillator.frequency.linearRampToValueAtTime(100, ctx.currentTime + 0.2);
-
       gainNode.gain.setValueAtTime(volume * 0.5, ctx.currentTime);
       gainNode.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.2);
-
-      oscillator.connect(gainNode);
-      gainNode.connect(ctx.destination);
-
+      connectSpatial(oscillator, gainNode);
       oscillator.start(ctx.currentTime);
       oscillator.stop(ctx.currentTime + 0.2);
-
-      // Track nodes for cleanup
-      activeNodes.push(oscillator, gainNode);
-
-      // Auto cleanup after sound finishes
-      setTimeout(() => {
-        try {
-          oscillator.disconnect();
-          gainNode.disconnect();
-        } catch (e) {
-          // Already disconnected
-        }
-      }, 250);
+      setTimeout(() => { try { oscillator.disconnect(); gainNode.disconnect(); } catch (_) {} }, 250);
     };
 
-    // Play random fish sounds based on fish count
     const soundInterval = setInterval(() => {
       if (!isMounted) return;
-      
       const randomEvent = Math.random();
-      
-      // More fish = more frequent sounds
-      if (randomEvent < fishCount * 0.02) {
-        playBubbleSound();
-      } else if (randomEvent < fishCount * 0.03) {
-        playSwimSound();
-      }
+      if (randomEvent < fishCount * 0.02) playBubbleSound();
+      else if (randomEvent < fishCount * 0.03) playSwimSound();
     }, 2000);
 
     return () => {
       isMounted = false;
       clearInterval(soundInterval);
-      
-      // Cleanup all active audio nodes
-      activeNodes.forEach(node => {
-        try {
-          node.disconnect();
-        } catch (e) {
-          // Already disconnected
-        }
-      });
+      activeNodes.forEach(node => { try { node.disconnect(); } catch (_) {} });
     };
-  }, [fishCount, volume]);
+  }, [fishCount, volume, fishXPositions]);
 
-  return null; // No visual component
+  return null;
 }

@@ -202,9 +202,20 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       gold: prev.gold - price,
       ownedFishIds: [...prev.ownedFishIds, fishId],
       fishInstances: [...prev.fishInstances, newInstance],
-      quests: prev.quests.map(q =>
-        q.id.includes("buy-fish") ? { ...q, progress: q.progress + 1 } : q
-      ),
+      quests: prev.quests.map(q => {
+        if (q.completed) return q;
+        if (q.id.includes("buy-")) {
+          // buy-rare matches rare+epic+legendary, buy-epic matches epic+legendary, buy-legendary matches legendary
+          const isRareOrAbove = ["rare","epic","legendary"].includes(fish.rarity);
+          const isEpicOrAbove = ["epic","legendary"].includes(fish.rarity);
+          const isLegendary = fish.rarity === "legendary";
+          if (q.id.includes("buy-legendary") && isLegendary) return { ...q, progress: q.progress + 1 };
+          if (q.id.includes("buy-epic") && isEpicOrAbove) return { ...q, progress: q.progress + 1 };
+          if (q.id.includes("buy-rare") && isRareOrAbove) return { ...q, progress: q.progress + 1 };
+          if (q.id.includes("buy-fish")) return { ...q, progress: q.progress + 1 };
+        }
+        return q;
+      }),
     }));
     return true;
   }, [level, state.gold, state.fishInstances]);
@@ -229,13 +240,21 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       // Update quest progress for "complete_sessions" type quests
       const updatedQuests = prev.quests.map(quest => {
         if (!quest.completed) {
-          // Session completion quests (session-20, session-60)
-          if (quest.id.includes("session-") && minutes >= parseInt(quest.id.split("-")[1] || "0")) {
-            return { ...quest, progress: quest.progress + 1 };
+          // Session completion quests (session-20, session-60, etc.)
+          if (quest.id.includes("session-")) {
+            const match = quest.id.match(/session-(\d+)/);
+            const reqMinutes = match ? parseInt(match[1]) : 0;
+            if (reqMinutes > 0 && minutes >= reqMinutes) {
+              return { ...quest, progress: quest.progress + 1 };
+            }
           }
-          // Total time quests (total-time)
+          // Total time quests
           if (quest.id.includes("total-time")) {
             return { ...quest, progress: quest.progress + minutes };
+          }
+          // Gold earned quests
+          if (quest.id.includes("earn-")) {
+            return { ...quest, progress: quest.progress + gold };
           }
         }
         return quest;
@@ -353,53 +372,60 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       breedingPairs: [...prev.breedingPairs, pair],
     }));
     
-    // After 24 hours, change to breeding status
+    // Breeding times based on rarity:
+    // common (grey) → 3h total (1h + 1h + 1h)
+    // rare   (blue) → 5h total (1.5h + 1.5h + 2h)
+    // epic   (purple)→ 7h total (2h + 2.5h + 2.5h)
+    // legendary (gold) → 24h total (8h + 8h + 8h)
+    const fishData = FISH_CATALOG.find(f => f.id === fish1.fishId);
+    const rarity = fishData?.rarity ?? 'common';
+    const H = 3600000;
+    const breedTime = {
+      common:    { courting: 1 * H,   breeding: 1 * H,     egg: 1 * H },
+      rare:      { courting: 1.5 * H, breeding: 1.5 * H,   egg: 2 * H },
+      epic:      { courting: 2 * H,   breeding: 2.5 * H,   egg: 2.5 * H },
+      legendary: { courting: 8 * H,   breeding: 8 * H,     egg: 8 * H },
+    }[rarity] ?? { courting: 1 * H, breeding: 1 * H, egg: 1 * H };
+
     setTimeout(() => {
-      setState(prev => {
-        const updatedPairs = prev.breedingPairs.map(p =>
+      setState(prev => ({
+        ...prev,
+        breedingPairs: prev.breedingPairs.map(p =>
           p.id === pair.id ? { ...p, status: "breeding" as const } : p
-        );
-        
-        return {
-          ...prev,
-          breedingPairs: updatedPairs,
-        };
-      });
-      
-      // After another 24 hours, lay egg
+        ),
+      }));
+
       setTimeout(() => {
-        setState(prev => {
-          const updatedPairs = prev.breedingPairs.map(p =>
+        setState(prev => ({
+          ...prev,
+          breedingPairs: prev.breedingPairs.map(p =>
             p.id === pair.id ? { ...p, status: "egg" as const, eggLaidDate: new Date().toISOString() } : p
-          );
-          
-          return {
-            ...prev,
-            breedingPairs: updatedPairs,
-          };
-        });
-        
-        // After another 48 hours, hatch
+          ),
+        }));
+
         setTimeout(() => {
           setState(prev => {
             const mother = prev.fishInstances.find(f => f.instanceId === pair.motherId);
             const father = prev.fishInstances.find(f => f.instanceId === pair.fatherId);
-            
             if (mother && father) {
               const baby = generateBabyFish(mother, father);
-              
               return {
                 ...prev,
                 fishInstances: [...prev.fishInstances, baby],
                 breedingPairs: prev.breedingPairs.filter(p => p.id !== pair.id),
-                ownedFishIds: [...prev.ownedFishIds, baby.fishId], // Add baby to owned fish
+                ownedFishIds: [...prev.ownedFishIds, baby.fishId],
+                quests: prev.quests.map(q =>
+                  (!q.completed && (q.id.includes("breed-") || q.id.includes("breed")))
+                    ? { ...q, progress: q.progress + 1 }
+                    : q
+                ),
               };
             }
             return prev;
           });
-        }, 48 * 60 * 60 * 1000); // 48 hours for egg incubation
-      }, 24 * 60 * 60 * 1000); // 24 hours for breeding
-    }, 24 * 60 * 60 * 1000); // 24 hours for courting
+        }, breedTime.egg);
+      }, breedTime.breeding);
+    }, breedTime.courting);
     
     return true;
   }, [state.fishInstances]);
@@ -469,7 +495,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       ...prev,
       feedCount: prev.feedCount + 1,
       quests: prev.quests.map(q =>
-        q.id.includes("feed-fish") ? { ...q, progress: q.progress + 1 } : q
+        (!q.completed && q.id.includes("feed-")) ? { ...q, progress: q.progress + 1 } : q
       ),
     }));
   }, []);

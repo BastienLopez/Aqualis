@@ -1,6 +1,7 @@
-import { motion } from "framer-motion";
+import { motion, memo as memoFM } from "framer-motion";
+import { memo } from "react";
 
-export default function BokehEffect() {
+function BokehEffect() {
   const bokehCircles = [...Array(12)].map((_, i) => ({
     x: 10 + (i * 77) % 85,
     y: 15 + (i * 43) % 70,
@@ -40,3 +41,5 @@ export default function BokehEffect() {
     </div>
   );
 }
+
+export default memo(BokehEffect);

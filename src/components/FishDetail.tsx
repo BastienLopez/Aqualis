@@ -43,7 +43,6 @@ export default function FishDetail({
   const similarFish = FISH_CATALOG.filter(f => f.rarity === fish.rarity && f.id !== fish.id).slice(0, 4);
 
   const handleBuy = () => {
-    if (owned) return;
     const success = buyFish(fish.id);
     if (success) {
       toast.success(`${fish.name} ajouté à ta collection !`);
@@ -192,10 +191,6 @@ export default function FishDetail({
               </span>
               <span className="text-foreground/40 text-sm font-medium">› ›</span>
             </motion.button>
-          ) : owned ? (
-            <div className="w-full py-4 rounded-2xl card-dark text-center text-sm font-bold text-accent">
-              Dans ta collection
-            </div>
           ) : (
             <motion.button
               whileTap={{ scale: 0.97 }}

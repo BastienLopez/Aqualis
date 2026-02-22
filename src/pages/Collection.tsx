@@ -1,9 +1,9 @@
-﻿import { useState } from "react";
+﻿import { useState, useRef, useEffect } from "react";
 import { useGame } from "@/contexts/GameContext";
-import { FISH_CATALOG, AQUARIUM_THEMES, Fish, MAX_FISH_PER_AQUARIUM } from "@/lib/gameData";
+import { FISH_CATALOG, AQUARIUM_THEMES, Fish, FishInstance, MAX_FISH_PER_AQUARIUM } from "@/lib/gameData";
 import FishCard from "@/components/FishCard";
 import FishDetail from "@/components/FishDetail";
-import { AnimatePresence } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { toast } from "sonner";
 import { pickImageSrc } from "@/lib/imageCache";
 
@@ -27,22 +27,39 @@ export default function Collection() {
   const [selectedFish, setSelectedFish] = useState<Fish | null>(null);
   const [showBreeding, setShowBreeding] = useState(false);
   const [selectedMother, setSelectedMother] = useState<string | null>(null);
+  const [babyPopup, setBabyPopup] = useState<{ fishData: Fish; instance: FishInstance } | null>(null);
+  const prevBabyCountRef = useRef<number>(-1);
+  const breedingPairs = getBreedingPairs();
+  const allFishInstances = getAllFishInstances();
+
+  // Detect new baby fish being born
+  useEffect(() => {
+    const babyInstances = allFishInstances.filter(f => f.isBaby);
+    const newCount = babyInstances.length;
+    if (prevBabyCountRef.current !== -1 && newCount > prevBabyCountRef.current) {
+      const newest = babyInstances[babyInstances.length - 1];
+      const fishData = newest ? FISH_CATALOG.find(f => f.id === newest.fishId) : null;
+      if (fishData && newest) setBabyPopup({ fishData, instance: newest });
+    }
+    prevBabyCountRef.current = newCount;
+  }, [allFishInstances]);
 
   const ownedFish = FISH_CATALOG.filter(f => ownedFishIds.includes(f.id));
   const fishInCurrentAquarium = aquariumFish[activeAquarium] || [];
   const currentTheme = AQUARIUM_THEMES.find(t => t.id === activeAquarium);
   const currentCount = fishCountInAquarium(activeAquarium);
-  const selectedInAquarium = selectedFish ? fishInCurrentAquarium.includes(selectedFish.id) : false;
-  const assignLabel = selectedInAquarium
-    ? "Retirer de l'aquarium"
-    : `Ajouter a ${currentTheme?.name ?? "cet aquarium"}`;
-  const assignMeta = infiniteMode 
-    ? `${currentTheme?.name ?? "Aquarium"} · ${currentCount} poissons (∞)` 
+  // Count how many of this specific fish are already in the aquarium
+  const selectedCountInAquarium = selectedFish
+    ? fishInCurrentAquarium.filter(id => id === selectedFish.id).length
+    : 0;
+  const assignLabel = selectedCountInAquarium > 0
+    ? `Ajouter encore (${selectedCountInAquarium} déjà présent${selectedCountInAquarium > 1 ? 's' : ''})`
+    : `Ajouter à ${currentTheme?.name ?? "cet aquarium"}`;
+  const assignMeta = infiniteMode
+    ? `${currentTheme?.name ?? "Aquarium"} · ${currentCount} poissons (∞)`
     : `${currentTheme?.name ?? "Aquarium"} · ${currentCount}/${MAX_FISH_PER_AQUARIUM}`;
-  const assignDisabled = !infiniteMode && !selectedInAquarium && currentCount >= MAX_FISH_PER_AQUARIUM;
+  const assignDisabled = !infiniteMode && currentCount >= MAX_FISH_PER_AQUARIUM;
 
-  const breedingPairs = getBreedingPairs();
-  const allFishInstances = getAllFishInstances();
   const fishInstances = allFishInstances.filter(instance => ownedFishIds.includes(instance.fishId));
   const adultFemales = fishInstances.filter(f => f.gender === "female" && !f.isBaby && f.age >= 7);
   const adultMales = fishInstances.filter(f => f.gender === "male" && !f.isBaby && f.age >= 7);
@@ -59,22 +76,17 @@ export default function Collection() {
   };
 
   const handleAssign = (fish: Fish) => {
-    if (fishInCurrentAquarium.includes(fish.id)) {
-      removeFishFromAquarium(fish.id, activeAquarium);
-      toast.info(`${fish.name} retiré de l'aquarium`);
+    // Always ADD — never toggle-remove (user can have multiple of same fish)
+    if (!infiniteMode && currentCount >= MAX_FISH_PER_AQUARIUM) {
+      toast.error(`Aquarium plein ! (${MAX_FISH_PER_AQUARIUM} max)`);
+      setSelectedFish(null);
+      return;
+    }
+    const success = assignFish(fish.id, activeAquarium);
+    if (success) {
+      toast.success(`${fish.name} ajouté à ${currentTheme?.name ?? "cet aquarium"} !`);
     } else {
-      // Check limit only if infinite mode is disabled
-      if (!infiniteMode && currentCount >= MAX_FISH_PER_AQUARIUM) {
-        toast.error(`Aquarium plein ! (${MAX_FISH_PER_AQUARIUM} max)`);
-        setSelectedFish(null);
-        return;
-      }
-      const success = assignFish(fish.id, activeAquarium);
-      if (success) {
-        toast.success(`${fish.name} ajouté à ${currentTheme?.name ?? "cet aquarium"} !`);
-      } else {
-        toast.error(`Aquarium plein !`);
-      }
+      toast.error(`Aquarium plein !`);
     }
     setSelectedFish(null);
   };
@@ -222,30 +234,39 @@ export default function Collection() {
               const statusText = pair.status === "courting" ? "🌸 Parade amoureuse" :
                                  pair.status === "breeding" ? "💕 Reproduction" :
                                  "🥚 Œuf en incubation";
-              
-              // Calculate time remaining more precisely
+
+              // Get rarity to know the timing
+              const motherInst = allFishInstances.find(f => f.instanceId === pair.motherId);
+              const fishData2 = motherInst ? FISH_CATALOG.find(f => f.id === motherInst.fishId) : null;
+              const rar = fishData2?.rarity ?? 'common';
+              const H = 3600000;
+              const times2 = {
+                common:    { courting: 1*H, breeding: 1*H,   egg: 1*H },
+                rare:      { courting: 1.5*H, breeding: 1.5*H, egg: 2*H },
+                epic:      { courting: 2*H,   breeding: 2.5*H, egg: 2.5*H },
+                legendary: { courting: 8*H,   breeding: 8*H,   egg: 8*H },
+              }[rar] ?? { courting: 1*H, breeding: 1*H, egg: 1*H };
+
               const startTime = new Date(pair.startDate).getTime();
               const now = Date.now();
               const elapsed = now - startTime;
-              
-              let daysLeft = 0;
+
+              let msLeft = 0;
               if (pair.status === "courting") {
-                // 1 day for courting
-                daysLeft = Math.ceil((24 * 60 * 60 * 1000 - elapsed) / (24 * 60 * 60 * 1000));
+                msLeft = Math.max(0, times2.courting - elapsed);
               } else if (pair.status === "breeding") {
-                // 1 day for breeding (already passed 1 day)
-                daysLeft = Math.ceil((48 * 60 * 60 * 1000 - elapsed) / (24 * 60 * 60 * 1000));
+                msLeft = Math.max(0, times2.courting + times2.breeding - elapsed);
               } else if (pair.status === "egg" && pair.eggLaidDate) {
-                // 2 days for egg incubation
-                const eggTime = new Date(pair.eggLaidDate).getTime();
-                daysLeft = Math.ceil((eggTime + 48 * 60 * 60 * 1000 - now) / (24 * 60 * 60 * 1000));
+                msLeft = Math.max(0, new Date(pair.eggLaidDate).getTime() + times2.egg - now);
               }
+              const hoursLeft = Math.ceil(msLeft / H);
+              const timeLabel = hoursLeft >= 24 ? `${Math.ceil(hoursLeft/24)}j` : `${hoursLeft}h`;
 
               return (
                 <div key={pair.id} className="glass-strong rounded-2xl p-3">
                   <div className="flex items-center justify-between mb-2">
                     <p className="text-xs font-bold text-foreground">{statusText}</p>
-                    <p className="text-[10px] text-muted-foreground">{daysLeft}j restant</p>
+                    <p className="text-[10px] text-muted-foreground">{timeLabel} restant</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="flex-1">
@@ -281,9 +302,8 @@ export default function Collection() {
         </div>
       ) : (
         <div className="px-5 space-y-4">{ownedFish.map((fish, i) => {
-            const inAquarium = fishInCurrentAquarium.includes(fish.id);
             return (
-              <div key={fish.id} className="relative">
+              <div key={`${fish.id}-${i}`} className="relative">
                 <FishCard
                   fish={fish}
                   onClick={() => setSelectedFish(fish)}
@@ -291,9 +311,9 @@ export default function Collection() {
                   variant={i % 2 === 0 ? "warm" : "cool"}
                   imageAlign="center"
                 />
-                {inAquarium && (
+                {fishInCurrentAquarium.filter(id => id === fish.id).length > 0 && (
                   <div className="absolute top-3 left-4 bg-accent text-accent-foreground text-[8px] font-bold px-2 py-0.5 rounded-full z-10 uppercase tracking-wider">
-                    Dans l'aquarium
+                    {fishInCurrentAquarium.filter(id => id === fish.id).length}× dans l’aquarium
                   </div>
                 )}
               </div>
@@ -313,6 +333,78 @@ export default function Collection() {
             assignDisabled={assignDisabled}
             onAssign={() => handleAssign(selectedFish)}
           />
+        )}
+      </AnimatePresence>
+
+      {/* 🐣 Baby fish born popup */}
+      <AnimatePresence>
+        {babyPopup && (
+          <motion.div
+            className="fixed inset-0 z-[80] flex items-center justify-center p-6"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(6px)' }}
+          >
+            <motion.div
+              className="rounded-3xl p-6 w-full max-w-sm text-center"
+              initial={{ scale: 0.8, y: 40 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.8, y: 40 }}
+              transition={{ type: 'spring', stiffness: 260, damping: 22 }}
+              style={{ background: 'linear-gradient(145deg, hsl(270 40% 14%), hsl(220 40% 10%))' , border: '1px solid rgba(255,200,100,0.3)' }}
+            >
+              <motion.div
+                animate={{ scale: [1, 1.15, 1] }}
+                transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+                className="text-5xl mb-3"
+              >
+                🐣
+              </motion.div>
+              <h2 className="text-lg font-extrabold text-foreground mb-1">Félicitations !</h2>
+              <p className="text-sm text-muted-foreground mb-4">Un nouveau <span className="text-gold font-bold">{babyPopup.fishData.name}</span> est né !</p>
+              <div className="w-28 h-28 mx-auto mb-4 rounded-2xl overflow-hidden bg-white/5 flex items-center justify-center">
+                <img
+                  src={pickImageSrc(babyPopup.fishData.image, babyPopup.fishData.imageMobile)}
+                  alt={babyPopup.fishData.name}
+                  className="w-full h-full object-contain"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground mb-5">
+                Rareté : <span className="font-bold text-accent capitalize">{babyPopup.fishData.rarity}</span>
+                {babyPopup.instance.hiddenTraits?.bioluminescent && babyPopup.instance.hiddenTraits.bioluminescent !== 'none' && (
+                  <span className="ml-2 text-cyan-400">✨ Bioluminescent</span>
+                )}
+                {babyPopup.instance.hiddenTraits?.secretHybrid && (
+                  <span className="ml-2 text-purple-400">🔮 Hybride secret</span>
+                )}
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setBabyPopup(null)}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-bold text-foreground/60"
+                  style={{ background: 'hsl(240 8% 16%)' }}
+                >
+                  Plus tard
+                </button>
+                <button
+                  onClick={() => {
+                    const success = assignFish(babyPopup.fishData.id, activeAquarium);
+                    if (success) {
+                      toast.success(`${babyPopup.fishData.name} ajouté à l'aquarium ! 🐟`);
+                    } else {
+                      toast.error('Aquarium plein !');
+                    }
+                    setBabyPopup(null);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white"
+                  style={{ background: 'linear-gradient(90deg, hsl(140 55% 38%), hsl(160 60% 42%))' }}
+                >
+                  Ajouter à l'aquarium
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>

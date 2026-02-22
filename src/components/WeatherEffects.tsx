@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from "framer-motion";
 
 interface WeatherEffectsProps {
-  type: "storm" | null;
+  type: "storm" | "rain" | "fog" | null;
 }
 
 export default function WeatherEffects({ type }: WeatherEffectsProps) {
@@ -121,6 +121,66 @@ export default function WeatherEffects({ type }: WeatherEffectsProps) {
               }}
             />
           ))}
+        </div>
+      )}
+
+      {/* RAIN */}
+      {type === "rain" && (
+        <div className="absolute inset-0 pointer-events-none z-25">
+          {/* Rain overlay tint */}
+          <div className="absolute inset-0 bg-gradient-to-b from-slate-600/20 to-slate-800/25" />
+          {/* Raindrops */}
+          {Array.from({ length: 30 }, (_, i) => (
+            <motion.div
+              key={`raindrop-${i}`}
+              className="absolute w-px bg-gradient-to-b from-blue-300/60 to-transparent"
+              style={{
+                left: `${(i * 97 / 30) % 100}%`,
+                top: "-8%",
+                height: `${6 + (i % 4) * 2}%`,
+              }}
+              animate={{ y: ["0%", "110%"], opacity: [0, 0.7, 0.7, 0] }}
+              transition={{
+                duration: 0.6 + (i % 5) * 0.1,
+                delay: (i * 0.07) % 1.5,
+                repeat: Infinity,
+                ease: "linear",
+              }}
+            />
+          ))}
+          {/* Ripple circles at surface */}
+          {Array.from({ length: 6 }, (_, i) => (
+            <motion.div
+              key={`ripple-${i}`}
+              className="absolute rounded-full border border-blue-300/25"
+              style={{
+                left: `${10 + i * 14}%`,
+                top: "4%",
+                width: 0,
+                height: 0,
+              }}
+              animate={{ width: ["0px","24px"], height: ["0px","24px"], opacity: [0.7, 0], marginLeft: ["-0px","-12px"], marginTop: ["-0px","-12px"] }}
+              transition={{ duration: 0.8, delay: i * 0.22, repeat: Infinity }}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* FOG */}
+      {type === "fog" && (
+        <div className="absolute inset-0 pointer-events-none z-25">
+          {Array.from({ length: 5 }, (_, i) => (
+            <motion.div
+              key={`fog-${i}`}
+              className="absolute inset-0"
+              style={{
+                background: `radial-gradient(ellipse ${60 + i * 15}% ${25 + i * 8}% at ${20 + i * 16}% ${30 + i * 8}%, rgba(200,220,240,${0.06 + i * 0.015}) 0%, transparent 70%)`,
+              }}
+              animate={{ x: [0, 18 * (i % 2 === 0 ? 1 : -1), 0], opacity: [0.6, 1, 0.6] }}
+              transition={{ duration: 10 + i * 3, repeat: Infinity, ease: "easeInOut" }}
+            />
+          ))}
+          <div className="absolute inset-0 bg-slate-400/8" />
         </div>
       )}
     </AnimatePresence>

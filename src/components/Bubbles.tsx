@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 
-export default function Bubbles({ count = 20 }: { count?: number }) {
+function Bubbles({ count = 20 }: { count?: number }) {
   const bubbles = useMemo(() =>
     Array.from({ length: count }, (_, i) => ({
       id: i,
@@ -56,3 +56,4 @@ export default function Bubbles({ count = 20 }: { count?: number }) {
   );
 }
 
+export default memo(Bubbles);

@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { memo } from "react";
 
 // Each rock cluster is defined by layered shapes and gradients
 const ROCK_CLUSTERS = [
@@ -46,7 +47,7 @@ const LICHEN = [
   { left: "82%", h: 17, w: 2, c: "rgba(30,88,36,0.28)" },
 ];
 
-export default function HidingRocks() {
+function HidingRocks() {
   return (
     <div className="absolute inset-0 pointer-events-none z-[6]" style={{ overflow: 'hidden' }}>
 
@@ -97,3 +98,5 @@ export default function HidingRocks() {
     </div>
   );
 }
+
+export default memo(HidingRocks);

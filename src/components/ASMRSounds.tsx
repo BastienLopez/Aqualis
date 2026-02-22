@@ -211,5 +211,74 @@ export default function ASMRSounds({ enabled, volume = 0.4, isRaining = false, i
     };
   }, [isNight, volume]);
 
+  // 🌊 Deep underwater resonance — 3-harmonic hum (55Hz + 147Hz + 220Hz)
+  // Gives the "you are inside a large body of water" feeling
+  useEffect(() => {
+    if (!enabled) return;
+    let ctx: AudioContext;
+    try {
+      ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    } catch { return; }
+    const masterGain = ctx.createGain();
+    masterGain.gain.setValueAtTime(0, ctx.currentTime);
+    masterGain.gain.linearRampToValueAtTime(volume * 0.07, ctx.currentTime + 5);
+    masterGain.connect(ctx.destination);
+    // Fundamental 55 Hz — deep sub-bass presence
+    const osc1 = ctx.createOscillator();
+    const g1 = ctx.createGain();
+    osc1.type = 'sine'; osc1.frequency.value = 55; g1.gain.value = 1.0;
+    osc1.connect(g1); g1.connect(masterGain); osc1.start();
+    // 2nd harmonic 147 Hz — mid-low warmth
+    const osc2 = ctx.createOscillator();
+    const g2 = ctx.createGain();
+    osc2.type = 'sine'; osc2.frequency.value = 147; g2.gain.value = 0.40;
+    osc2.connect(g2); g2.connect(masterGain); osc2.start();
+    // 3rd harmonic 220 Hz — subtle upper presence
+    const osc3 = ctx.createOscillator();
+    const g3 = ctx.createGain();
+    osc3.type = 'triangle'; osc3.frequency.value = 220; g3.gain.value = 0.20;
+    osc3.connect(g3); g3.connect(masterGain); osc3.start();
+    return () => {
+      try {
+        osc1.stop(); osc2.stop(); osc3.stop();
+        osc1.disconnect(); osc2.disconnect(); osc3.disconnect();
+        g1.disconnect(); g2.disconnect(); g3.disconnect();
+        masterGain.disconnect(); ctx.close();
+      } catch {}
+    };
+  }, [enabled, volume]);
+
+  // 🫧 Water filter hum — gentle high-pitched whirr of the aquarium filter
+  useEffect(() => {
+    if (!enabled) return;
+    let ctx: AudioContext;
+    let isMounted = true;
+    let intervals: number[] = [];
+    try {
+      ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    } catch { return; }
+    // Intermittent soft "filter whirr" — sawtooth 380Hz, very brief
+    const playFilterWhirr = () => {
+      if (!isMounted) return;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(380, ctx.currentTime);
+      osc.frequency.linearRampToValueAtTime(310, ctx.currentTime + 0.6);
+      g.gain.setValueAtTime(0, ctx.currentTime);
+      g.gain.linearRampToValueAtTime(volume * 0.04, ctx.currentTime + 0.15);
+      g.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.6);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(); osc.stop(ctx.currentTime + 0.65);
+      setTimeout(() => { try { osc.disconnect(); g.disconnect(); } catch {} }, 700);
+    };
+    intervals.push(window.setInterval(() => { if (isMounted) playFilterWhirr(); }, 9000 + Math.round(Math.random() * 4000)));
+    return () => {
+      isMounted = false;
+      intervals.forEach(id => clearInterval(id));
+      try { ctx.close(); } catch {}
+    };
+  }, [enabled, volume]);
+
   return null; // No visual component
 }

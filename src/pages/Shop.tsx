@@ -16,7 +16,8 @@ export default function Shop() {
   const [activeTab, setActiveTab] = useState("Poissons");
   const [selectedFish, setSelectedFish] = useState<Fish | null>(null);
 
-  const availableFish = FISH_CATALOG.filter(f => !ownedFishIds.includes(f.id));
+  // Show ALL fish — player can buy the same fish as many times as they want
+  const availableFish = FISH_CATALOG;
 
   const rarityGradient: Record<string, string> = {
     common: 'linear-gradient(135deg, hsl(0 0% 14%), hsl(0 0% 18%))',
@@ -125,13 +126,7 @@ export default function Shop() {
               );
             })}
           </div>
-          {availableFish.length === 0 && (
-            <div className="text-center py-16">
-              <div className="text-5xl mb-4">🎉</div>
-              <p className="text-foreground font-bold">Tu possèdes tous les poissons !</p>
-              <p className="text-sm text-muted-foreground mt-1">Impressionnant.</p>
-            </div>
-          )}
+
         </div>
       )}
 

@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
+import { memo } from "react";
 
-export default function SurfaceReflections() {
+function SurfaceReflections() {
   return (
     <div className="absolute top-0 left-0 right-0 h-32 pointer-events-none overflow-hidden z-[5]">
       {/* Water surface ripples */}
@@ -54,3 +55,4 @@ export default function SurfaceReflections() {
     </div>
   );
 }
+export default memo(SurfaceReflections);

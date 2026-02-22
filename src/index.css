@@ -1,4 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap&display=swap');
+/* display=swap: text renders immediately in fallback font, then swaps when Inter loads */
 
 @tailwind base;
 @tailwind components;
@@ -134,5 +135,53 @@
   }
   .glow-cyan {
     box-shadow: 0 0 20px hsl(var(--accent) / 0.25), 0 0 60px hsl(var(--accent) / 0.08);
+  }
+
+  /* ─── PERFORMANCE: GPU compositing layers ───────────────────────────── */
+  /* Fish swimming area: promote to GPU layer, isolate paint */
+  .fish-swimming-area {
+    will-change: transform;
+    contain: layout style paint;
+    /* Prevent browser from repainting entire page on fish movement */
+    isolation: isolate;
+  }
+
+  /* Animated overlays: GPU layer, no reflow impact */
+  .gpu-layer {
+    will-change: transform, opacity;
+    transform: translateZ(0);
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
+
+  /* ─── MOBILE: Disable iOS rubber-band scroll inside tank ────────────── */
+  .tank-container {
+    touch-action: none;          /* We handle touch manually for fish interaction */
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: none;
+    /* Prevent iOS callout on long-press over fish images */
+    -webkit-touch-callout: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* ─── MOBILE: Disable tap highlight flicker on buttons ─────────────── */
+  button, [role="button"] {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;  /* Removes 300ms click delay on mobile */
+  }
+
+  /* ─── SCROLLABLE PAGES: smooth momentum scroll on iOS ──────────────── */
+  .scroll-page {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+  }
+
+  /* ─── IMAGES: prevent layout shift, crisp rendering ────────────────── */
+  img {
+    image-rendering: auto;
+    /* Avoid "blurry fish" on high-DPI Android */
+    image-rendering: -webkit-optimize-contrast;
   }
 }

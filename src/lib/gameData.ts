@@ -88,6 +88,17 @@ export interface FishInstance {
     size: number;
     speed: number;
   };
+  /** Hidden bioluminescent trait – only appears at night or under specific conditions */
+  hiddenTraits?: {
+    bioluminescent?: "none" | "soft" | "reactive" | "intense";
+    fractalPattern?: boolean;
+    /** 0–1 inherited dominance bias — shifts personality toward dominant/timid */
+    dominanceBias?: number;
+    /** 0–1 inherited timidity bias — shy parents produce shy babies */
+    timidityBias?: number;
+    /** Secret hybrid: emerges when fractalPattern + bioluminescent=intense co-occur */
+    secretHybrid?: boolean;
+  };
   isBaby: boolean;
   birthDate: string;
   parents?: { mother: string; father: string };
@@ -142,7 +153,7 @@ export const FISH_CATALOG: Fish[] = [
     description: "Un petit poisson vibrant avec une bande bleue irisée. Originaire des eaux sombres d'Amérique du Sud.",
     size: "3.5 cm",
     temperature: "20-26°C",
-    diet: "Omnivore",
+    diet: "Herbivore",
     swimSpeed: "fast",
     behavior: "schooling",
   },
@@ -157,7 +168,7 @@ export const FISH_CATALOG: Fish[] = [
     description: "L'un des poissons d'eau douce les plus populaires avec une queue arc-en-ciel spectaculaire.",
     size: "5 cm",
     temperature: "22-28°C",
-    diet: "Omnivore",
+    diet: "Herbivore",
     swimSpeed: "normal",
     behavior: "schooling",
   },
@@ -203,7 +214,7 @@ export const FISH_CATALOG: Fish[] = [
     description: "Un poisson d'un rouge éclatant endémique du Sri Lanka.",
     size: "5 cm",
     temperature: "23-27°C",
-    diet: "Omnivore",
+    diet: "Herbivore",
     swimSpeed: "normal",
     behavior: "schooling",
   },
@@ -680,16 +691,64 @@ export function canBreedFish(fish1: FishInstance, fish2: FishInstance): boolean 
 }
 
 export function generateBabyFish(mother: FishInstance, father: FishInstance): FishInstance {
+  // 0.5 % chance of rare mutation → one genetic trait jumps dramatically
+  const hasMutation = Math.random() < 0.005;
+  const mutationTrait = (["color", "pattern", "size", "speed"] as const)[Math.floor(Math.random() * 4)];
+  // 0.2% extra: secret-hybrid level mutation (intense bio + fractal simultaneously)
+  const hasSecretMutation = Math.random() < 0.002;
+
+  const blend = (a: number, b: number) => (a + b) / 2 + (Math.random() - 0.5) * 20;
+
+  const genetics = {
+    color:   blend(mother.genetics.color,   father.genetics.color),
+    pattern: blend(mother.genetics.pattern, father.genetics.pattern),
+    size:    blend(mother.genetics.size,    father.genetics.size),
+    speed:   blend(mother.genetics.speed,   father.genetics.speed),
+  };
+  if (hasMutation) genetics[mutationTrait] = Math.min(100, genetics[mutationTrait] + 40 + Math.random() * 30);
+
+  // Inherit hidden bioluminescent trait; 1 % spontaneous emergence if parents lack it
+  const parentBio = mother.hiddenTraits?.bioluminescent ?? father.hiddenTraits?.bioluminescent;
+  const bioRoll = Math.random();
+  let bioluminescent: "none" | "soft" | "reactive" | "intense" = "none";
+  if (hasSecretMutation) {
+    bioluminescent = "intense";
+  } else if (parentBio && parentBio !== "none") {
+    // inherit with slight chance of intensification
+    bioluminescent = bioRoll < 0.6 ? parentBio : (bioRoll < 0.85 ? "reactive" : "intense");
+  } else if (bioRoll < 0.01) {
+    // spontaneous mutation (1 %)
+    bioluminescent = bioRoll < 0.003 ? "intense" : "soft";
+  }
+
+  const fractalPattern = hasSecretMutation || (hasMutation && mutationTrait === "pattern");
+  const secretHybrid = hasSecretMutation || (fractalPattern && bioluminescent === "intense");
+
+  // Behavioral inheritance: 70% parent traits, 30% random drift
+  const momDom = (mother.hiddenTraits?.dominanceBias ?? mother.genetics.speed / 100);
+  const dadDom = (father.hiddenTraits?.dominanceBias ?? father.genetics.speed / 100);
+  const dominanceBias = Math.max(0, Math.min(1,
+    (momDom * 0.35 + dadDom * 0.35) + (Math.random() - 0.5) * 0.3
+  ));
+  // 🐣 Timidity inheritance: shy parents (low dominanceBias) pass timidity to offspring
+  const momTimid = 1 - (mother.hiddenTraits?.dominanceBias ?? 0.5);
+  const dadTimid = 1 - (father.hiddenTraits?.dominanceBias ?? 0.5);
+  const timidityBias = Math.max(0, Math.min(1,
+    (momTimid * 0.35 + dadTimid * 0.35) + (Math.random() - 0.5) * 0.25
+  ));
+
   return {
     instanceId: `baby-${Date.now()}-${Math.random()}`,
     fishId: mother.fishId,
     gender: Math.random() < 0.5 ? "male" : "female",
     age: 0,
-    genetics: {
-      color: (mother.genetics.color + father.genetics.color) / 2 + (Math.random() - 0.5) * 20,
-      pattern: (mother.genetics.pattern + father.genetics.pattern) / 2 + (Math.random() - 0.5) * 20,
-      size: (mother.genetics.size + father.genetics.size) / 2 + (Math.random() - 0.5) * 20,
-      speed: (mother.genetics.speed + father.genetics.speed) / 2 + (Math.random() - 0.5) * 20,
+    genetics,
+    hiddenTraits: {
+      bioluminescent,
+      fractalPattern,
+      dominanceBias,
+      timidityBias,
+      secretHybrid,
     },
     isBaby: true,
     birthDate: new Date().toISOString(),

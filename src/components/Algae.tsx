@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { useMemo } from "react";
+import { useMemo, memo } from "react";
 
 interface AlgaeProps {
   count?: number;
@@ -32,7 +32,7 @@ function buildAlgaePath(segments: number, h: number, curveOffset: number): strin
   return d;
 }
 
-export default function Algae({ count = 10 }: AlgaeProps) {
+function Algae({ count = 10 }: AlgaeProps) {
   const algae: AlgaeDef[] = useMemo(() => {
     return Array.from({ length: count }, (_, i) => {
       const t = i / count;
@@ -165,3 +165,5 @@ export default function Algae({ count = 10 }: AlgaeProps) {
     </div>
   );
 }
+
+export default memo(Algae);

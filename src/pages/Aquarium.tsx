@@ -23,6 +23,9 @@ import HidingRocks from "@/components/HidingRocks";
 import Algae from "@/components/Algae";
 import FishGames from "@/components/FishGames";
 import ASMRSounds from "@/components/ASMRSounds";
+import WaterSounds from "@/components/WaterSounds";
+import WasteParticles from "@/components/WasteParticles";
+import PlanktonParticles from "@/components/PlanktonParticles";
 import { motion, AnimatePresence } from "framer-motion";
 
 // Module-level frozen arrays → stable references → Framer Motion never sees a "changed" animate prop → no restart flicker
@@ -35,7 +38,7 @@ const CLICK_SCALE = Object.freeze([1, 1.3, 1.2, 1.1, 1]) as number[];
 export default function Aquarium() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { gold, level, xpProgress, totalXP, activeAquarium, aquariumFish, userName, setActiveAquarium, ownedAquariums, sessions, companionLevel, setUserName, incrementFeedCount, infiniteMode, toggleInfiniteMode, fishInstances, lastAchievementUnlocked, clearLastAchievement, unlockedAchievements, spendGold } = useGame();
+  const { gold, level, xpProgress, totalXP, activeAquarium, aquariumFish, userName, setActiveAquarium, ownedAquariums, sessions, companionLevel, setUserName, incrementFeedCount, infiniteMode, toggleInfiniteMode, fishInstances, lastAchievementUnlocked, clearLastAchievement, unlockedAchievements, spendGold, breedingPairs } = useGame();
   const theme = AQUARIUM_THEMES.find(t => t.id === activeAquarium) || AQUARIUM_THEMES[0];
   const themeBackground = pickImageSrc(theme.background, theme.backgroundMobile);
   const fishInTank = (aquariumFish[activeAquarium] || [])
@@ -60,10 +63,11 @@ export default function Aquarium() {
   const [clickedFishId, setClickedFishId] = useState<string | null>(null);
   const [feedingActive, setFeedingActive] = useState(false);
   const [fishFedPositions, setFishFedPositions] = useState<Record<string, { x: number; y: number }>>({});
-  const [weather, setWeather] = useState<"storm" | null>(null);
+  const [weather, setWeather] = useState<"storm" | "rain" | "fog" | null>(null);
   const [floorType, setFloorType] = useState<"sand" | "rock" | "reef">("sand");
   const [season, setSeason] = useState<"spring" | "summer" | "autumn" | "winter">("spring");
   const [isNightMode, setIsNightMode] = useState(false);
+  const [deepNightMode, setDeepNightMode] = useState(false);
   const [showDecorations, setShowDecorations] = useState(true);
   const [mousePosition, setMousePosition] = useState<{ x: number; y: number } | null>(null);
   const [fishPositions, setFishPositions] = useState<Record<string, { x: number; y: number }>>({});
@@ -73,35 +77,215 @@ export default function Aquarium() {
   const [waterQuality, setWaterQuality] = useState({ ph: 7.2, nitrates: 10, health: 95 });
   const [filterBroken, setFilterBroken] = useState(false);
   const [showEventNotif, setShowEventNotif] = useState<string | null>(null);
+  // Detect breeding completion (pair removed = baby hatched)
+  const prevBreedingCountRef = useRef(breedingPairs.length);
+  useEffect(() => {
+    if (breedingPairs.length < prevBreedingCountRef.current) {
+      // Check if the latest baby has special hidden traits
+      const latestBaby = [...fishInstances]
+        .filter(f => f.isBaby)
+        .sort((a, b) => new Date(b.birthDate).getTime() - new Date(a.birthDate).getTime())[0];
+      if (latestBaby?.hiddenTraits?.secretHybrid) {
+        setShowEventNotif("Espece secrete debloquee ! Verifiez votre collection.");
+      } else if (latestBaby?.hiddenTraits?.fractalPattern) {
+        setShowEventNotif("Mutation rare ! Motif fractal detecte.");
+      } else {
+        setShowEventNotif("Nouveau poisson ne ! Verifiez votre collection.");
+      }
+      setTimeout(() => setShowEventNotif(null), 5000);
+      // 🎥 Caméra intelligente — focus sur la reproduction
+      setCameraFocus({ x: 50, y: 55, zoom: 1.12 });
+      setTimeout(() => setCameraFocus(null), 8000);
+    }
+    prevBreedingCountRef.current = breedingPairs.length;
+  }, [breedingPairs.length]);
   const [sessionComplete, setSessionComplete] = useState<{
     reward: { gold: number; xp: number };
     activityLabel: string;
     durationLabel: string;
   } | null>(null);
 
-  // Fish personalities (generated once per fish)
+  // ── NEW FEATURE STATES ────────────────────────────────────────────────────
+  /** 0–1 ripple tap effects: [{id, x%, y%, createdAt}] */
+  const [tapRipples, setTapRipples] = useState<{ id: number; x: number; y: number }[]>([]);
+  /** Increments on each tap — drives per-fish flinch animation key */
+  const [tapFlinchId, setTapFlinchId] = useState(0);
+  /** Whether the score breakdown panel is visible */
+  const [showScoreBreakdown, setShowScoreBreakdown] = useState(false);
+  /** Current water direction: angle degrees (0=right, 180=left) — changes every ~45s */
+  const [currentAngle, setCurrentAngle] = useState(0);
+  const [currentStrength, setCurrentStrength] = useState(0.4); // 0–1
+  /** 0–1 lunar phase, 0=new moon (dark), 1=full moon (bright) */
+  const lunarPhase = useMemo(() => {
+    const knownNewMoon = new Date("2024-01-11").getTime();
+    const cycleMs = 29.53 * 24 * 3600 * 1000;
+    const phase = ((Date.now() - knownNewMoon) % cycleMs) / cycleMs; // 0–1
+    // Convert to brightness: 0.5 = full moon (mid-cycle), 0 and 1 = new moon
+    return 1 - Math.abs(phase - 0.5) * 2;
+  }, []);
+
+  // Fish personalities (generated once per fish) — must be before tankMood
   const fishPersonalities = useMemo(() => 
     fishInTank.map((fish, i) => {
       // Use fish ID and index for deterministic pseudorandom values
       const seed = fish.id.charCodeAt(0) + fish.id.charCodeAt(fish.id.length - 1) + i;
       const pseudoRandom = (Math.sin(seed) * 10000) % 1;
       const pseudoRandom2 = (Math.cos(seed * 2) * 10000) % 1;
+
+      // Behavioral inheritance from parents via hiddenTraits.dominanceBias
+      const instance = fishInstances.find(fi => fi.fishId === fish.id);
+      const inheritedDom = instance?.hiddenTraits?.dominanceBias;
+      const baseDominance = Math.abs(pseudoRandom2);
+      const dominance = inheritedDom !== undefined
+        ? Math.max(0, Math.min(1, baseDominance * 0.5 + inheritedDom * 0.5))
+        : baseDominance;
+
+      // 30% parental behavioral transmission for babies
+      const parentInst = instance?.parents
+        ? (fishInstances.find(fi => fi.instanceId === instance.parents!.mother) ??
+           fishInstances.find(fi => fi.instanceId === instance.parents!.father))
+        : undefined;
+      const parentIsTimid = (parentInst?.hiddenTraits?.dominanceBias ?? 0.5) < 0.32;
+      const parentIsConfident = (parentInst?.hiddenTraits?.dominanceBias ?? 0.5) > 0.70;
+      const baseEnergy = 0.5 + (Math.sin(fish.id.charCodeAt(0) + i) * 0.5 + 0.5) * 0.5;
+      const adjustedEnergy = instance?.isBaby
+        ? (parentIsTimid ? baseEnergy * 0.72 : parentIsConfident ? Math.min(1, baseEnergy * 1.25) : baseEnergy)
+        : baseEnergy;
       
       return {
         trait: ["bold", "timid", "playful", "lazy", "curious", "territorial"][Math.floor((fish.id.charCodeAt(0) + i) % 6)] as "bold" | "timid" | "playful" | "lazy" | "curious" | "territorial",
-        energy: 0.5 + (Math.sin(fish.id.charCodeAt(0) + i) * 0.5 + 0.5) * 0.5, // 0.5-1.0
+        energy: adjustedEnergy,
         curiosity: fish.behavior === "curious" ? 0.8 : 0.2 + Math.abs(pseudoRandom) * 0.3,
-        preferredDepth: fish.behavior === "solitary" ? "bottom" as const : 
+        preferredDepth: (instance?.isBaby && parentIsTimid) ? "bottom" as const :
+                        fish.behavior === "solitary" ? "bottom" as const : 
                         fish.swimSpeed === "fast" ? "surface" as const : 
                         "middle" as const,
-        dominance: Math.abs(pseudoRandom2), // 0-1, affects social hierarchy
+        dominance,
         aggression: fish.diet === "Carnivore" ? 0.6 + Math.abs(pseudoRandom) * 0.4 : Math.abs(pseudoRandom) * 0.3,
-        health: 100, // Individual health tracking
+        health: 100,
         stressed: false,
       };
     }),
-    [fishInTank]
+    [fishInTank, fishInstances]
   );
+
+  /** Aquarium mood: calm | balanced | stressed | chaotic */
+  const tankMood = useMemo(() => {
+    const stressedCount = fishPersonalities.filter(p => p.stressed).length;
+    const avgHealth = Object.values(fishHealths).length
+      ? Object.values(fishHealths).reduce((a, b) => a + b, 0) / Object.values(fishHealths).length
+      : 95;
+    const avgAggression = fishPersonalities.reduce((s, p) => s + p.aggression, 0) / Math.max(1, fishPersonalities.length);
+    const nitrateScore = waterQuality.nitrates;
+    const score = stressedCount * 20 + (100 - avgHealth) * 0.5 + avgAggression * 40 + nitrateScore * 0.6;
+    if (score < 20) return "calm";
+    if (score < 45) return "balanced";
+    if (score < 75) return "stressed";
+    return "chaotic";
+  }, [fishPersonalities, fishHealths, waterQuality]);
+  /** Aquarium quality score 0–100 */
+  const aquariumScore = useMemo(() => {
+    const speciesCount = new Set(fishInTank.map(f => f.id)).size;
+    const avgHealth = Object.values(fishHealths).length
+      ? Object.values(fishHealths).reduce((a, b) => a + b, 0) / Object.values(fishHealths).length
+      : 95;
+    const rarityBonus = fishInTank.reduce((s, f) => s + (f.rarity === "legendary" ? 20 : f.rarity === "epic" ? 10 : f.rarity === "rare" ? 5 : 1), 0);
+    const harmonyBonus = tankMood === "calm" ? 20 : tankMood === "balanced" ? 10 : tankMood === "stressed" ? -10 : -25;
+    const raw = Math.min(100, speciesCount * 8 + avgHealth * 0.3 + Math.min(rarityBonus, 30) + harmonyBonus);
+    return Math.max(0, Math.round(raw));
+  }, [fishInTank, fishHealths, tankMood]);
+  const aquariumRank = aquariumScore >= 80 ? "🌟 Aquarium Harmonieux" : aquariumScore >= 55 ? "🏆 Écosystème Stable" : aquariumScore >= 30 ? "⚠️ Équilibre Fragile" : "🔴 Chaos Aquatique";
+
+  /** Biome mystique : 3+ légendaires + eau parfaite */
+  const isMysticBiome = useMemo(() =>
+    fishInTank.filter(f => f.rarity === "legendary").length >= 3 &&
+    waterQuality.health >= 90 && waterQuality.nitrates < 12
+  , [fishInTank, waterQuality]);
+
+  /**
+   * Biome abyssal caché : nuit profonde + 3+ bio poissons + eau cristalline.
+   * Override total de l'ambiance : fond noir, espèces 100% luminescentes, particules abyssales.
+   */
+  const isAbyssalBiome = useMemo(() => {
+    const localBioCount = fishInstances.filter(
+      fi => fi.hiddenTraits?.bioluminescent && fi.hiddenTraits.bioluminescent !== "none"
+    ).length;
+    return isNightMode && deepNightMode &&
+      localBioCount >= 3 &&
+      waterQuality.health >= 92 && waterQuality.nitrates < 10 &&
+      !isMysticBiome;
+  }, [isNightMode, deepNightMode, fishInstances, waterQuality, isMysticBiome]);
+
+  /**
+   * Global bioluminescence intensity scalar (0–1).
+   * Single source of truth: night × water clarity × tank mood × lunar phase.
+   * All bio glow renderers should multiply their base opacity by this value.
+   */
+  const bioIntensity = useMemo(() => {
+    const nightFactor = isNightMode ? 1 : 0.18;
+    const clarityFactor = Math.max(0.2, 1 - waterQuality.nitrates / 50);
+    const moodFactor = tankMood === "calm" ? 1.22 : tankMood === "balanced" ? 1.0 : tankMood === "stressed" ? 0.68 : 0.38;
+    const moonFactor = 0.4 + lunarPhase * 0.6;
+    return nightFactor * clarityFactor * moodFactor * moonFactor;
+  }, [isNightMode, waterQuality.nitrates, tankMood, lunarPhase]);
+
+  /** Courant local (drag du doigt / souris) — vecteur temporaire */
+  const [localCurrentVX, setLocalCurrentVX] = useState(0);
+  const [localCurrentVY, setLocalCurrentVY] = useState(0);
+  const [dragTrail, setDragTrail] = useState<{ id: number; x: number; y: number }[]>([]);
+  const dragCurrentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Double-tap → grosse bulle montante */
+  const lastTapTimeRef = useRef(0);
+  const [giantBubbles, setGiantBubbles] = useState<{ id: number; x: number; y: number }[]>([]);
+
+  /** Follow-finger: pointer position and slow-move detection */
+  const [fingerPos, setFingerPos] = useState<{ x: number; y: number } | null>(null);
+  const [isFollowActive, setIsFollowActive] = useState(false);
+  const fingerSpeedRef = useRef<{ x: number; y: number; t: number }>({ x: 50, y: 50, t: 0 });
+  const followTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Onde surprise — tap when playful fish present triggers amused spin */
+  const [surpriseWaveId, setSurpriseWaveId] = useState(0);
+
+  /** Bioluminescent flash — sync entre poissons luminescents proches */
+  const [bioFlashActive, setBioFlashActive] = useState(false);
+  /** Response flash — Fish B answers ~700ms after Fish A's initial ping */
+  const [bioResponseActive, setBioResponseActive] = useState(false);
+  const bioFishCount = fishInstances.filter(fi => fi.hiddenTraits?.bioluminescent && fi.hiddenTraits.bioluminescent !== "none").length;
+
+  // ── NEW STATES: Interactions & Effects ───────────────────────────────────
+  /** Ondulations sur maintien du doigt / souris */
+  const [holdWaves, setHoldWaves] = useState<{ id: number; x: number; y: number }[]>([]);
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** Tempête lumineuse — tous bio-poissons brillent fort 10s */
+  const [lightStormActive, setLightStormActive] = useState(false);
+
+  /** Synchronisation collective — 3+ bio poissons pulsent à l'unisson */
+  const [bioCollectivePulse, setBioCollectivePulse] = useState(0);
+
+  /** Migration nocturne — groupe lumineux traverse le tank lentement */
+  const [nocturnalMigrationActive, setNocturnalMigrationActive] = useState(false);
+  const [nocturnalMigrationDir, setNocturnalMigrationDir] = useState<1 | -1>(1);
+
+  /** Caméra intelligente — zoom/pan vers événement rare */
+  const [cameraFocus, setCameraFocus] = useState<{ x: number; y: number; zoom: number } | null>(null);
+
+  /** Suivi vitesse souris pour "suis le doigt" (décroché si trop rapide) */
+  const mouseSpeedRef = useRef(0);
+  const lastMouseRef = useRef<{ x: number; y: number; t: number } | null>(null);
+
+  /** Direction de chaque poisson : 1=droite, -1=gauche — mis à jour lors des changements de cap */
+  const fishDirections = useRef<Record<number, 1 | -1>>({});
+
+  /** Date d'installation pour croissance des coraux */
+  const coralStartTimeRef = useRef(Date.now());
+
+  /** Hybride secret débloqué */
+  const [hybridUnlocked, setHybridUnlocked] = useState<string | null>(null);
+  /** Track fish that already triggered evolved-form notification (avoids re-firing) */
+  const [evolvedFishIds, setEvolvedFishIds] = useState<Set<string>>(new Set());
+  // ─────────────────────────────────────────────────────────────────────────
 
   // Auto-dismiss achievement toast after 5 seconds
   useEffect(() => {
@@ -116,20 +300,38 @@ export default function Aquarium() {
     setIsNightMode(currentHour < 6 || currentHour >= 20);
   }, []);
 
-  // Track mouse position for curious fish
+  // Track mouse position for curious fish + speed for "suis le doigt"
   useEffect(() => {
+    let rafId: number | null = null;
     const handleMouseMove = (e: MouseEvent) => {
-      const rect = document.querySelector('.fish-swimming-area')?.getBoundingClientRect();
-      if (rect) {
-        setMousePosition({
-          x: ((e.clientX - rect.left) / rect.width) * 100,
-          y: ((e.clientY - rect.top) / rect.height) * 100,
-        });
-      }
+      // Throttle to one update per animation frame — critical for mobile perf
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        const rect = document.querySelector('.fish-swimming-area')?.getBoundingClientRect();
+        if (rect) {
+          const x = ((e.clientX - rect.left) / rect.width) * 100;
+          const y = ((e.clientY - rect.top) / rect.height) * 100;
+          setMousePosition({ x, y });
+          // Speed tracking
+          const now = Date.now();
+          if (lastMouseRef.current) {
+            const dt = Math.max(1, now - lastMouseRef.current.t);
+            const dx = x - lastMouseRef.current.x;
+            const dy = y - lastMouseRef.current.y;
+            mouseSpeedRef.current = Math.sqrt(dx*dx + dy*dy) / dt * 1000; // %/s
+          }
+          lastMouseRef.current = { x, y, t: now };
+        }
+      });
     };
 
-    window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
+    // passive: true = browser knows we won't call preventDefault → no scroll blocking
+    window.addEventListener('mousemove', handleMouseMove, { passive: true });
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
   }, []);
 
   // Update fish positions for sand particles and shrimp prey systems
@@ -142,12 +344,9 @@ export default function Aquarium() {
         const fishKey = `${fish.id}-${i}`;
         const style = getFishStyle(i);
         
-        // Get current position based on animation cycle
-        // This is an approximation - we extract startX/Y and assume fish is mid-cycle
         const baseX = parseFloat(style.startX);
         const baseY = parseFloat(style.startY);
         
-        // Add some variation to simulate movement
         const movementPhase = (Date.now() / (style.duration * 1000)) % 1;
         const movementIndex = Math.floor(movementPhase * (style.movementX.length - 1));
         const offsetX = style.movementX[movementIndex] || 0;
@@ -158,7 +357,6 @@ export default function Aquarium() {
         
         newPositions[fishKey] = { x: currentX, y: currentY };
         
-        // Track carnivorous fish positions for hunting
         if (fish.diet === "Carnivore") {
           newCarnivores.push({ x: currentX, y: currentY });
         }
@@ -166,7 +364,7 @@ export default function Aquarium() {
       
       setFishPositions(newPositions);
       setCarnivorePositions(newCarnivores);
-    }, 500); // Update every 500ms
+    }, 900); // 900ms — visual system, no need for 500ms ticks
     
     return () => clearInterval(updateInterval);
   }, [fishInTank, isNightMode, fishPersonalities]);
@@ -297,7 +495,7 @@ export default function Aquarium() {
     }
   }, [sessions]);
 
-  // Glass tap + circle swim + eating frenzy random events
+  // Glass tap + circle swim + eating frenzy + social behaviors random events
   useEffect(() => {
     const interval = setInterval(() => {
       if (fishInTank.length > 0) {
@@ -316,11 +514,188 @@ export default function Aquarium() {
           setShowEventNotif("🍽️ Heure du repas !");
           setTimeout(() => setShowEventNotif(null), 3000);
           setTimeout(() => setShowRareEvent(null), 5000);
+        } else if (roll < 0.52 && fishInTank.filter(f => f.behavior === "schooling").length >= 2) {
+          // Playful chase between schooling fish
+          setShowEventNotif("🏁 Course improvisée !");
+          setShowRareEvent("playful-chase");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 6000);
+        } else if (roll < 0.60 && fishPersonalities.filter(p => p.energy < 0.4).length >= 2) {
+          // Group meditation — lazy/slow fish gather quietly
+          setShowEventNotif("🧘 Méditation de groupe…");
+          setShowRareEvent("meditation");
+          setTimeout(() => setShowEventNotif(null), 4000);
+          setTimeout(() => setShowRareEvent(null), 10000);
+        } else if (roll < 0.68 && fishPersonalities.filter(p => p.dominance > 0.65).length >= 2) {
+          // Dominance challenge
+          setShowEventNotif("👑 Défi territorial !");
+          setShowRareEvent("dominance-challenge");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 7000);
+        } else if (
+          roll < 0.78 &&
+          isNightMode &&
+          waterQuality.health > 88 &&
+          waterQuality.nitrates < 15 &&
+          fishInTank.length >= 3 &&
+          fishPersonalities.every(p => !p.stressed)
+        ) {
+          // Chorégraphie rare — eau parfaite + nuit + 0 stress
+          setShowEventNotif("🌌 Chorégraphie mystique…");
+          setShowRareEvent("choreography");
+          setTimeout(() => setShowEventNotif(null), 5000);
+          setTimeout(() => setShowRareEvent(null), 14000);
+        } else if (
+          roll < 0.85 &&
+          isNightMode &&
+          fishInTank.some(f => f.id === "jellyfish") &&
+          fishInTank.some(f => f.id === "seahorse")
+        ) {
+          // Ballet luminescent — méduse + hippocampe la nuit
+          setShowEventNotif("✨ Ballet luminescent…");
+          setShowRareEvent("luminous-ballet");
+          setTimeout(() => setShowEventNotif(null), 4000);
+          setTimeout(() => setShowRareEvent(null), 11000);
+        } else if (
+          roll < 0.91 &&
+          !isNightMode &&
+          tankMood === "calm" &&
+          fishInTank.filter(f => f.behavior === "schooling").length >= 3
+        ) {
+          // Rotation circulaire — eau calme + banc de poissons + journée
+          setShowEventNotif("🔵 Ronde parfaite !");
+          setShowRareEvent("circular-rotation");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 9000);
+        } else if (
+          roll < 0.96 &&
+          isNightMode &&
+          fishInTank.length >= 3
+        ) {
+          // Migration nocturne — groupe lumineux traverse lentement le tank
+          setShowEventNotif("🌊 Migration nocturne…");
+          setShowRareEvent("night-migration");
+          setTimeout(() => setShowEventNotif(null), 4000);
+          setTimeout(() => setShowRareEvent(null), 12000);
+        } else if (
+          roll < 0.97 &&
+          !isNightMode &&
+          tankMood === "calm" &&
+          fishPersonalities.some(p => p.energy < 0.5)
+        ) {
+          // Spirale en duo — 2 poissons calmes tournent en spirale
+          setShowEventNotif("🌀 Spirale zen…");
+          setShowRareEvent("spiral-duo");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 8000);
+        } else if (
+          roll < 0.975 &&
+          fishPersonalities.some(p => p.trait === "timid") &&
+          !isNightMode
+        ) {
+          // Cache-cache / je te vois — poisson timide se cache
+          setShowEventNotif("🙈 Cache-cache !");
+          setShowRareEvent("hide-seek");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 7000);
+        } else if (
+          roll < 0.98 &&
+          fishInTank.filter(f => f.behavior === "schooling").length >= 2
+        ) {
+          // Effet vague banc — dash → vague décalée
+          setShowEventNotif("⚡ Effet de vague !");
+          setShowRareEvent("wave-effect");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 5000);
+        } else if (
+          roll < 0.983 &&
+          fishPersonalities.some(p => p.trait === "playful")
+        ) {
+          // Le farceur — poisson playful approche un timide puis se cache
+          setShowEventNotif("😈 Le farceur !");
+          setShowRareEvent("trickster");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 6000);
+        } else if (
+          roll < 0.986 &&
+          tankMood === "calm" &&
+          !isNightMode
+        ) {
+          // Jeu avec décor — poissons tournent autour des coraux
+          setShowEventNotif("🐚 Jeu avec les coraux…");
+          setShowRareEvent("decor-play");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 8000);
+        } else if (
+          roll < 0.989 &&
+          currentStrength > 0.5 &&
+          tankMood !== "chaotic"
+        ) {
+          // Courant fantaisie — poissons se laissent porter
+          setShowEventNotif("🌊 Courant fantaisie…");
+          setShowRareEvent("current-drift");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 7000);
+        } else if (
+          roll < 0.991 &&
+          fishInstances.some(fi => fi.isBaby) &&
+          fishInTank.length >= 2
+        ) {
+          // Apprentissage de nage — bébé suit un adulte
+          setShowEventNotif("🍼 Leçon de nage !");
+          setShowRareEvent("swim-lesson");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 9000);
+        } else if (
+          roll < 0.993 &&
+          fishInstances.some(fi => fi.isBaby)
+        ) {
+          // Jeu des bulles — bébé chasse des bulles
+          setShowEventNotif("🫧 Jeu des bulles !");
+          setShowRareEvent("bubble-game");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 8000);
+        } else if (
+          roll < 0.996 &&
+          fishPersonalities.filter(p => p.dominance > 0.6).length >= 2
+        ) {
+          // Défi amical — deux dominants face à face, se gonflent, un cède
+          setShowEventNotif("👑 Défi amical !");
+          setShowRareEvent("friendly-challenge");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 8000);
+        } else if (
+          roll < 0.997 &&
+          fishPersonalities.some(p => p.trait === "territorial")
+        ) {
+          // Défi territorial — poisson territorial défend son espace
+          setShowEventNotif("🏁 Défense du territoire !");
+          setShowRareEvent("territory-dash");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 6000);
+        } else if (
+          roll < 0.9995 &&
+          fishInTank.length >= 2
+        ) {
+          // Bulles géantes — deux poissons font la course vers une bulle
+          setShowEventNotif("🫧 Course aux bulles !");
+          setShowRareEvent("giant-bubble-race");
+          setTimeout(() => setShowEventNotif(null), 3000);
+          setTimeout(() => setShowRareEvent(null), 7000);
+        } else if (
+          fishPersonalities.filter(p => p.trait === "playful" || p.trait === "curious").length >= 3 &&
+          tankMood === "calm"
+        ) {
+          // Comportement émergent — groupe playful invente trajectoire, change de leader
+          setShowEventNotif("🐠 Groupe émergent...");
+          setShowRareEvent("emergent-group");
+          setTimeout(() => setShowEventNotif(null), 3500);
+          setTimeout(() => setShowRareEvent(null), 12000);
         }
       }
     }, 15000); // Check every 15 seconds
     return () => clearInterval(interval);
-  }, [fishInTank.length]);
+  }, [fishInTank.length, fishPersonalities, isNightMode, tankMood, currentStrength]);
 
   // Random events system - filter breakdown, water quality changes
   useEffect(() => {
@@ -357,7 +732,237 @@ export default function Aquarium() {
     }
   }, [feedingActive]);
 
+  // ── COURANT DYNAMIQUE : direction change toutes les 40–65s ────────────────
+  useEffect(() => {
+    const randomize = () => {
+      setCurrentAngle(Math.random() < 0.55 ? 0 : 180); // mostly left↔right
+      setCurrentStrength(0.2 + Math.random() * 0.7);
+    };
+    randomize();
+    const iv = setInterval(randomize, 40000 + Math.random() * 25000);
+    return () => clearInterval(iv);
+  }, []);
+
+  // ── NITRATES : crevettes/déchets augmentent les nitrates doucement ────────
+  useEffect(() => {
+    const iv = setInterval(() => {
+      setWaterQuality(prev => ({
+        ...prev,
+        nitrates: Math.min(50, prev.nitrates + (fishInTank.length > 3 ? 0.4 : 0.15)),
+      }));
+    }, 20000);
+    return () => clearInterval(iv);
+  }, [fishInTank.length]);
+
+  // ── ALGUES POUSSENT SI NITRATES > 35 (event notif) ───────────────────────
+  useEffect(() => {
+    if (waterQuality.nitrates >= 35) {
+      setShowEventNotif("🌿 Les algues prolifèrent ! (nitrates élevés)");
+      const t = setTimeout(() => setShowEventNotif(null), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [Math.round(waterQuality.nitrates / 5)]); // fire when crosses 5-unit buckets
+
+  // ── ÉCOSYSTÈME : poissons herbivores mangent les algues → ↓ nitrates ─────
+  const herbivoreCount = useMemo(
+    () => fishInTank.filter(f => f.diet === "Herbivore").length,
+    [fishInTank]
+  );
+  useEffect(() => {
+    if (herbivoreCount === 0) return;
+    const iv = setInterval(() => {
+      setWaterQuality(prev => ({
+        ...prev,
+        nitrates: Math.max(0, prev.nitrates - herbivoreCount * 0.4),
+      }));
+    }, 25000);
+    return () => clearInterval(iv);
+  }, [herbivoreCount]);
+
+  // ── ÉCOSYSTÈME : nourrir les poissons → léger pic de nitrates ────────────
+  useEffect(() => {
+    if (feedingActive) {
+      setWaterQuality(prev => ({
+        ...prev,
+        nitrates: Math.min(50, prev.nitrates + 1.2),
+      }));
+    }
+  }, [feedingActive]);
+
+  // ── FLASH BIOLUMINESCENT COMMUNICATION (séquence A → pause → B) ──────────
+  useEffect(() => {
+    if (bioFishCount < 2) return;
+    const base = isNightMode ? 4000 : 9000;
+    const iv = setInterval(() => {
+      // Step 1 — Fish A initiates (ping)
+      setBioFlashActive(true);
+      setTimeout(() => setBioFlashActive(false), 450);
+      // Step 2 — Fish B responds after a natural pause
+      setTimeout(() => {
+        setBioResponseActive(true);
+        setTimeout(() => setBioResponseActive(false), 400);
+      }, 1100);
+    }, base + Math.random() * 4000);
+    return () => clearInterval(iv);
+  }, [bioFishCount, isNightMode]);
+
+  // ── BIOME MYSTIQUE — notification à l'activation ──────────────────────────
+  useEffect(() => {
+    if (isMysticBiome) {
+      setShowEventNotif("🌑 Biome Mystique débloqué…");
+      const t = setTimeout(() => setShowEventNotif(null), 5000);
+      return () => clearTimeout(t);
+    }
+  }, [isMysticBiome]);
+
+  // ── BIOME ABYSSAL — notification quand conditions réunies ──────────────────────
+  useEffect(() => {
+    if (isAbyssalBiome) {
+      setShowEventNotif("🌌 Biome Abyssal actif…");
+      const t = setTimeout(() => setShowEventNotif(null), 6000);
+      return () => clearTimeout(t);
+    }
+  }, [isAbyssalBiome]);
+
+  // ── ESPÈCE ÉVOLUTIVE — notification quand un poisson atteint la forme mature (30j) ──
+  useEffect(() => {
+    const newEvolved = fishInstances.filter(
+      fi => (fi.age ?? 0) >= 30 && !evolvedFishIds.has(fi.instanceId ?? fi.fishId)
+    );
+    if (newEvolved.length > 0) {
+      const fi = newEvolved[0]!;
+      setEvolvedFishIds(prev => {
+        const next = new Set(prev);
+        newEvolved.forEach(f => next.add(f.instanceId ?? f.fishId));
+        return next;
+      });
+      const fishName = FISH_CATALOG.find(f => f.id === fi.fishId)?.name ?? fi.fishId;
+      setShowEventNotif(`✨ ${fishName} a atteint sa forme mature semi-légendaire !`);
+      setTimeout(() => setShowEventNotif(null), 6000);
+    }
+  }, [fishInstances, evolvedFishIds]);
+
+  // ── TEMPÊTE LUMINEUSE — eau parfaite + nuit + bio fish ─────────────────────
+  useEffect(() => {
+    if (bioFishCount < 2 || !isNightMode) return;
+    const iv = setInterval(() => {
+      if (waterQuality.health >= 88 && waterQuality.nitrates < 15 && Math.random() < 0.08) {
+        setLightStormActive(true);
+        setShowEventNotif("⚡ Tempête lumineuse !");
+        setTimeout(() => { setLightStormActive(false); setShowEventNotif(null); }, 10000);
+      }
+    }, 60000);
+    return () => clearInterval(iv);
+  }, [bioFishCount, isNightMode, waterQuality]);
+
+  // ── SYNCHRONISATION COLLECTIVE — 3+ bio poissons battent en phase ────────
+  useEffect(() => {
+    if (bioFishCount < 3 || !isNightMode) return;
+    const iv = setInterval(() => {
+      setBioCollectivePulse(v => v + 1);
+    }, 2500);
+    return () => clearInterval(iv);
+  }, [bioFishCount, isNightMode]);
+
+  // ── MIGRATION NOCTURNE — traversée lente du tank sous la lune ─────────────
+  useEffect(() => {
+    if (bioFishCount < 2 || !isNightMode) return;
+    const iv = setInterval(() => {
+      if (!nocturnalMigrationActive && Math.random() < 0.022) {
+        const dir: 1 | -1 = Math.random() > 0.5 ? 1 : -1;
+        setNocturnalMigrationDir(dir);
+        setNocturnalMigrationActive(true);
+        setShowEventNotif("🌑 Migration nocturne…");
+        setTimeout(() => {
+          setNocturnalMigrationActive(false);
+          setShowEventNotif(null);
+        }, 18000);
+      }
+    }, 90000);
+    return () => clearInterval(iv);
+  }, [bioFishCount, isNightMode, nocturnalMigrationActive]);
+
+  // ── CAMÉRA INTELLIGENTE — zoom vers les événements rares ──────────────────
+  useEffect(() => {
+    if (["choreography", "luminous-ballet", "circular-rotation", "spiral-duo"].includes(showRareEvent ?? "")) {
+      setCameraFocus({ x: 50, y: 48, zoom: 1.06 });
+      const t = setTimeout(() => setCameraFocus(null), 12000);
+      return () => clearTimeout(t);
+    } else {
+      setCameraFocus(null);
+    }
+  }, [showRareEvent]);
+
+  // ── HYBRIDE SECRET — bébé avec bioluminescent + fractal des 2 parents ──────
+  useEffect(() => {
+    const secretFish = fishInstances.find(fi =>
+      fi.hiddenTraits?.bioluminescent && fi.hiddenTraits.bioluminescent !== "none" &&
+      fi.hiddenTraits?.fractalPattern === true &&
+      (fi.age ?? 0) < 7 // recently born
+    );
+    if (secretFish && !hybridUnlocked) {
+      setHybridUnlocked(secretFish.fishId);
+      setShowEventNotif("🔒 Espèce secrète débloquée ! Hybride Lumina");
+      setTimeout(() => setShowEventNotif(null), 6000);
+      setTimeout(() => setHybridUnlocked(null), 9000);
+    }
+  }, [fishInstances]);
+
   const availableAquariums = AQUARIUM_THEMES.filter(t => ownedAquariums.includes(t.id));
+
+  // ── TAP SUR LA VITRE ─────────────────────────────────────────────────────
+  const handleTankTap = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    // Ignore settings / UI clicks
+    const target = e.target as HTMLElement;
+    if (target.closest("button") || target.closest("[data-ui]")) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const xPct = ((e.clientX - rect.left) / rect.width) * 100;
+    const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+    const now = Date.now();
+    const id = now;
+    // Double-tap detection (< 300ms since last tap)
+    if (now - lastTapTimeRef.current < 300) {
+      setGiantBubbles(prev => [...prev, { id, x: xPct, y: yPct }]);
+      setTimeout(() => setGiantBubbles(prev => prev.filter(b => b.id !== id)), 2500);
+    } else {
+      setTapRipples(prev => [...prev, { id, x: xPct, y: yPct }]);
+      setTimeout(() => setTapRipples(prev => prev.filter(r => r.id !== id)), 1200);
+      setTapFlinchId(id);
+      setTimeout(() => setTapFlinchId(0), 850);
+      // Onde surprise — playful fish do an amused reaction instead of flinch
+      if (fishPersonalities.some(p => p.trait === 'playful')) {
+        setSurpriseWaveId(id);
+        setTimeout(() => setSurpriseWaveId(0), 950);
+      }
+    }
+    lastTapTimeRef.current = now;
+  }, [fishPersonalities]);
+
+  /** Courant local : crée un courant visuel là où le doigt glisse */
+  const handleDragCurrent = useCallback((clientX: number, clientY: number, rect: DOMRect) => {
+    const xPct = ((clientX - rect.left) / rect.width) * 100;
+    const yPct = ((clientY - rect.top) / rect.height) * 100;
+    const id = Date.now();
+    setDragTrail(prev => [...prev.slice(-8), { id, x: xPct, y: yPct }]);
+    if (dragCurrentTimerRef.current) clearTimeout(dragCurrentTimerRef.current);
+    dragCurrentTimerRef.current = setTimeout(() => setDragTrail([]), 1800);
+  }, []);
+
+  /** Maintenir doigt → onde pulsante */
+  const handleHoldStart = useCallback((clientX: number, clientY: number, rect: DOMRect) => {
+    if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+    holdTimerRef.current = setTimeout(() => {
+      const xPct = ((clientX - rect.left) / rect.width) * 100;
+      const yPct = ((clientY - rect.top) / rect.height) * 100;
+      const id = Date.now();
+      setHoldWaves(prev => [...prev, { id, x: xPct, y: yPct }]);
+      setTimeout(() => setHoldWaves(prev => prev.filter(w => w.id !== id)), 3000);
+    }, 400);
+  }, []);
+
+  const handleHoldEnd = useCallback(() => {
+    if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+  }, []);
 
   // Companion fish scale based on total time
   const companionScale = 1 + Math.min(companionLevel * 0.05, 0.5);
@@ -372,6 +977,7 @@ export default function Aquarium() {
     const isDominant = personality.dominance > 0.7;
     const isTimid = personality.dominance < 0.3;
     const isAggressive = personality.aggression > 0.6;
+    const isPlayful = personality.trait === 'playful';
     
     // Adjust for night time (fish sleep and slow down)
     const nightSlowdown = isNightMode ? 1.8 : 1.0;
@@ -387,27 +993,47 @@ export default function Aquarium() {
     const q4 = Math.abs(Math.sin(i * 5.9 + 3.2));
     const q5 = Math.abs(Math.sin(i * 13.7 + 0.5));
 
+    // School fish cluster together in a tight formation; all others spread across tank
+    const isSchoolFish = fish?.behavior === "schooling";
+    const schoolSlot = i % 6; // slot 0–5 in V-formation
     // Spread fish across the full tank horizontally (5% to 78%)
-    const startXPct = 5 + q1 * 73;
+    const startXPct = isSchoolFish
+      ? 18 + schoolSlot * 12  // 18%, 30%, 42%, 54%, 66%, 78% — spread across tank
+      : 3 + q1 * 88;
 
     // Vertical start zone based on depth preference
     let startY: number;
     if (personality.preferredDepth === "bottom") {
-      startY = 62 + q2 * 18; // 62–80% (near bottom)
+      startY = 65 + q2 * 23; // 65–88% (near bottom)
     } else if (personality.preferredDepth === "surface") {
-      startY = 5 + q3 * 18;  // 5–23% (near surface)
+      startY = 3 + q3 * 18;  // 3–21% (near surface)
     } else if (isDominant) {
-      startY = 30 + q1 * 25; // 30–55% (mid tank, prominent)
+      startY = 25 + q1 * 30; // 25–55% (mid tank, prominent)
     } else {
-      startY = 10 + q1 * 60; // 10–70% (anywhere)
+      startY = 8 + q1 * 72; // 8–80% (anywhere)
     }
+
+    // ── MIGRATION THERMIQUE — poissons dérivent vers leur zone de T° idéale ──
+    // T° de l'eau varie selon l'heure (±4°C), la saison (±2°C) et le filtre
+    const _hourAngle = (new Date().getHours() + new Date().getMinutes() / 60) / 24;
+    const _tempHour  = Math.sin((_hourAngle - 0.25) * 2 * Math.PI) * 4; // ±4°C (pic midi)
+    const _tempSeason = season === "summer" ? 2 : season === "winter" ? -2 : 0;
+    const _waterTemp  = 24 + _tempHour + _tempSeason + (filterBroken ? (q1 - 0.5) * 2 : 0);
+    // Poissons de surface aiment le chaud → remontent si T°>24
+    // Poissons du fond aiment le frais → s'enfoncent légèrement si T°>26
+    // Poissons milieu : légère remontée si très chaud, descente si très froid
+    const _thermalOffset =
+      personality.preferredDepth === "surface" ? Math.max(-10, (_waterTemp - 24) * -1.4) :
+      personality.preferredDepth === "bottom"  ? Math.min(5, Math.max(-2, (_waterTemp - 26) * 0.7)) :
+      (_waterTemp > 27) ? -4 : (_waterTemp < 21) ? 3 : 0;
+    startY = Math.max(2, Math.min(85, startY + _thermalOffset));
 
     // Bounded movement paths: keep fish inside tank (0–100% horizontal)
     // movementX is pixels from startX. Max safe right: (100-startXPct)/100*380
     // Max safe left: -(startXPct-2)/100*380
     const tankW = 375;
-    const safeRight = Math.round(((92 - startXPct) / 100) * tankW);
-    const safeLeft  = -Math.round(((startXPct - 3) / 100) * tankW);
+    const safeRight = Math.round(((95 - startXPct) / 100) * tankW);
+    const safeLeft  = -Math.round(((startXPct - 2) / 100) * tankW);
 
     // 8 waypoints — fish zigzags across tank like a real fish
     const px = (f: number) => Math.round(safeLeft + f * (safeRight - safeLeft));
@@ -457,11 +1083,18 @@ export default function Aquarium() {
     }
 
     switch (archetype) {
-      // 1. SCHOOLING — formation swimming across the full tank
+      // 1. SCHOOLING — synchronized V-formation sweep across tank
       case "school": {
-        const lane = (i % 4) * 10;
-        movementX = [0, Math.round(safeRight*0.28)+lane, Math.round(safeRight*0.68)+lane, safeRight, Math.round(safeRight*0.52)+lane, Math.round(safeLeft*0.25)+lane, Math.round(safeLeft*0.6), 0];
-        movementY = [0, -22, 12, -18, 6, 20, -12, 0];
+        // V-formation: alternating left/right of center line, deeper rows fall behind
+        const vRow  = Math.floor(schoolSlot / 2); // 0,0,1,1,2,2
+        const vSide = schoolSlot % 2 === 0 ? 1 : -1; // alternate L/R wings
+        const fX = vRow * 22 * vSide; // ±22, ±44px lateral offset from row centre
+        const fY = vRow * 16;         // 0, 16, 32px vertical depth in formation
+        // All school fish share the same sweep path, offset by formation slot
+        const sR = Math.round(safeRight * 0.7);
+        const sL = Math.round(safeLeft  * 0.7);
+        movementX = [fX, fX+Math.round(sR*0.45), fX+sR, fX+Math.round(sR*0.65), fX, fX+Math.round(sL*0.45), fX+sL, fX];
+        movementY = [fY, fY-16, fY+10, fY-12, fY+4, fY-16, fY+8, fY];
         break;
       }
       // 2. ZIGZAG — aggressive fish: rapid lateral Z-pattern
@@ -486,15 +1119,15 @@ export default function Aquarium() {
         movementY = [0, Math.round(-vRange*0.12), Math.round(vRange*0.08), 0, Math.round(-vRange*0.12), Math.round(vRange*0.08), 0, 0];
         break;
       }
-      // 5. HOVER — tired/night/lazy: near-stationary gentle bob
+      // 5. HOVER — tired/night/lazy: slower but still swims the full tank
       case "hover": {
-        const hR = Math.round(safeRight * 0.22);
-        const hL = Math.round(safeLeft * 0.22);
-        movementX = [0, hR, hL, Math.round(hR*0.5), Math.round(hL*0.6), 0];
-        movementY = [0, -18, 28, -14, 22, 0];
+        const hR = Math.round(safeRight * 0.65);
+        const hL = Math.round(safeLeft * 0.65);
+        movementX = [0, hR, Math.round(hL*0.5), Math.round(hR*0.75), hL, Math.round(hR*0.35), Math.round(hL*0.8), 0];
+        movementY = [0, -18, 28, -14, 22, -10, 18, 0];
         if (isNightMode) {
-          movementX = movementX.map(x => Math.round(x * 0.35));
-          movementY = movementY.map(y => Math.round(y * 0.3 + 40));
+          movementX = movementX.map(x => Math.round(x * 0.55));
+          movementY = movementY.map(y => Math.round(y * 0.5 + 15));
         }
         break;
       }
@@ -506,11 +1139,11 @@ export default function Aquarium() {
         movementY = [0, -12, -38, -32, 0, 0, 22, 16, 0];
         break;
       }
-      // 7. SKULK — timid fish: tight nervous movements near starting corner
+      // 7. SKULK — timid fish: nervous but still covers much of the tank
       case "skulk": {
-        const sk = Math.round(Math.min(Math.abs(safeLeft), safeRight) * 0.42);
-        movementX = [0, sk, Math.round(-sk*0.7), Math.round(sk*0.4), Math.round(-sk*0.9), Math.round(sk*0.6), 0];
-        movementY = [0, Math.round(-vRange*0.28), Math.round(vRange*0.38), Math.round(-vRange*0.22), Math.round(vRange*0.18), Math.round(-vRange*0.12), 0];
+        const sk = Math.round(Math.min(Math.abs(safeLeft), safeRight) * 0.75);
+        movementX = [0, sk, Math.round(safeLeft*0.5), Math.round(sk*0.8), Math.round(safeLeft*0.7), Math.round(sk*0.5), Math.round(safeLeft*0.3), 0];
+        movementY = [0, Math.round(-vRange*0.4), Math.round(vRange*0.5), Math.round(-vRange*0.35), Math.round(vRange*0.3), Math.round(-vRange*0.25), Math.round(vRange*0.15), 0];
         break;
       }
       // 8. DEFAULT — varied zigzag across full tank
@@ -523,6 +1156,16 @@ export default function Aquarium() {
     // startX as percent
     const startX = startXPct;
 
+    // School fish use synchronized duration so they all sweep at the same speed
+    const effectiveDuration = isSchoolFish ? baseDuration * nightSlowdown * 1.1 : duration;
+
+    // scaleX keyframes: 1=face right, -1=face left — derived from movementX deltas
+    // Same technique as companion fish orbit (faceKf). Framer Motion handles the flip.
+    const movementScaleX = movementX.map((x, k) => {
+      const next = movementX[k + 1] ?? movementX[k - 1] ?? x;
+      return (next ?? x) >= x ? 1 : -1;
+    });
+
     // SOCIAL HIERARCHY: Dominant fish are slightly larger
     let sizeClass = fish?.rarity === "legendary" ? "w-20 h-20" : 
                     fish?.rarity === "epic" ? "w-18 h-18" : 
@@ -532,22 +1175,42 @@ export default function Aquarium() {
       sizeClass = fish?.rarity === "epic" ? "w-20 h-20" : "w-16 h-16";
     }
     
+    // Courant physique : biais des trajectoires vers la direction du courant
+    if (currentStrength > 0.1) {
+      const biasDir = (Math.cos((currentAngle * Math.PI) / 180) > 0 ? 1 : -1);
+      const biasPx = Math.round(currentStrength * 28 * biasDir);
+      movementX = movementX.map(x => x + biasPx);
+    }
+
+    // 🌊 Depth-based desaturation: fish lower in tank appear more blue/desaturated
+    const depthFactor = Math.max(0, (startY - 25) / 70); // 0 near surface, ~1 at 95%
+    const depthFilter = depthFactor > 0.06
+      ? `saturate(${(1 - depthFactor * 0.28).toFixed(2)}) brightness(${(1 - depthFactor * 0.10).toFixed(2)}) hue-rotate(${Math.round(depthFactor * 14)}deg)`
+      : undefined;
+
+    // 🪨 Calm zone near HidingRocks (clusters at ~5%, ~40%, ~76%) — fish slow down
+    const nearRock = [5, 40, 76].some(rx => Math.abs(startXPct - rx) < 10);
+    const effectiveDurationFinal = effectiveDuration * (nearRock ? 1.28 : 1.0);
+
     return {
       startX: `${Math.round(startXPct)}%`,
       startY: `${Math.round(startY)}%`,
       startYNum: startY,
-      duration,
+      duration: effectiveDurationFinal,
       movementX,
       movementY,
-      scaleX: i % 3 === 0 ? -1 : 1,
+      movementScaleX,
+      scaleX: movementScaleX[0] ?? 1,
       size: sizeClass,
       delay: i * 0.5,
       personality,
       isDominant,
       isTimid,
       isAggressive,
+      isPlayful,
+      depthFilter,
     };
-  }, [fishInTank, fishPersonalities, isNightMode]);
+  }, [fishInTank, fishPersonalities, isNightMode, currentStrength, currentAngle, season, filterBroken]);
 
   // Stable memoized styles — prevents Framer Motion from restarting on every state update
   const fishStyles = useMemo(
@@ -555,28 +1218,11 @@ export default function Aquarium() {
     [fishInTank, getFishStyle]
   );
 
-  // Fish facing direction — useRef so DOM updates never trigger React re-renders
-  const fishDirections = useRef<Record<number, number>>({});
-  const fishDirEls = useRef<Record<number, HTMLDivElement | null>>({});
-  useEffect(() => {
-    const interval = setInterval(() => {
-      fishStyles.forEach((s, i) => {
-        if (!s) return;
-        const cycleMs = s.duration * 1000;
-        const phase = ((Date.now() + s.delay * 1000) % cycleMs) / cycleMs;
-        const n = s.movementX.length;
-        const ki = Math.min(Math.floor(phase * n), n - 2);
-        const dx = (s.movementX[ki + 1] ?? 0) - (s.movementX[ki] ?? 0);
-        const dir = dx >= 0 ? 1 : -1;
-        if (fishDirections.current[i] !== dir) {
-          fishDirections.current[i] = dir;
-          const el = fishDirEls.current[i];
-          if (el) el.style.transform = `scaleX(${dir})`;
-        }
-      });
-    }, 280);
-    return () => clearInterval(interval);
-  }, [fishStyles]);
+  // Detects whether a carnivore is close enough to threaten schooling fish
+  const predatorNearSchool = useMemo(() => {
+    if (carnivorePositions.length === 0) return false;
+    return carnivorePositions.some(c => c.x > 25 && c.x < 80 && c.y > 20 && c.y < 92);
+  }, [carnivorePositions]);
 
   const tintHue = waterTint; // 0-360
   const schoolStartX = schoolDirection === "right" ? "-30%" : "130%";
@@ -592,6 +1238,9 @@ export default function Aquarium() {
   // Temperature based on season
   const seasonTemperature = { spring: 23, summer: 28, autumn: 21, winter: 18 };
   const currentTemperature = seasonTemperature[season];
+  // Dynamic temperature: varies ±2°C by hour (peak at 14h), minus 3°C if filter broken
+  const hourlyTempDelta = Math.round(Math.sin(((currentHour - 14) / 12) * Math.PI) * 2);
+  const dynamicTemp = currentTemperature + hourlyTempDelta + (filterBroken ? -3 : 0);
 
   // Season colors
   const seasonColors = {
@@ -604,7 +1253,60 @@ export default function Aquarium() {
   const currentSeasonColor = seasonColors[season];
 
   return (
-    <div className="fixed inset-x-0 top-0 flex flex-col" style={{ bottom: 0 }}>
+    <div className="fixed inset-x-0 top-0 flex flex-col tank-container" style={{ bottom: 0 }}
+      onClick={handleTankTap}
+      onMouseMove={(e) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        if (e.buttons === 1) handleDragCurrent(e.clientX, e.clientY, rect);
+        // Follow-finger position + speed tracking
+        const xPct = ((e.clientX - rect.left) / rect.width) * 100;
+        const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+        const nowMs = Date.now();
+        const dx = xPct - fingerSpeedRef.current.x;
+        const dy = yPct - fingerSpeedRef.current.y;
+        const dt = Math.max(nowMs - fingerSpeedRef.current.t, 1);
+        const spd = Math.sqrt(dx * dx + dy * dy) / dt * 100;
+        fingerSpeedRef.current = { x: xPct, y: yPct, t: nowMs };
+        setFingerPos({ x: xPct, y: yPct });
+        if (spd < 2.8) {
+          if (followTimeoutRef.current) clearTimeout(followTimeoutRef.current);
+          setIsFollowActive(true);
+          followTimeoutRef.current = setTimeout(() => { setIsFollowActive(false); setFingerPos(null); }, 3200);
+        } else {
+          setIsFollowActive(false);
+        }
+      }}
+      onMouseDown={(e) => handleHoldStart(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect())}
+      onMouseUp={handleHoldEnd}
+      onMouseLeave={handleHoldEnd}
+      onTouchMove={(e) => {
+        const t = e.touches[0];
+        const rect = e.currentTarget.getBoundingClientRect();
+        handleDragCurrent(t.clientX, t.clientY, rect);
+        // Follow-finger position + speed tracking (touch)
+        const xPct = ((t.clientX - rect.left) / rect.width) * 100;
+        const yPct = ((t.clientY - rect.top) / rect.height) * 100;
+        const nowMs = Date.now();
+        const dx = xPct - fingerSpeedRef.current.x;
+        const dy = yPct - fingerSpeedRef.current.y;
+        const dt = Math.max(nowMs - fingerSpeedRef.current.t, 1);
+        const spd = Math.sqrt(dx * dx + dy * dy) / dt * 100;
+        fingerSpeedRef.current = { x: xPct, y: yPct, t: nowMs };
+        setFingerPos({ x: xPct, y: yPct });
+        if (spd < 2.8) {
+          if (followTimeoutRef.current) clearTimeout(followTimeoutRef.current);
+          setIsFollowActive(true);
+          followTimeoutRef.current = setTimeout(() => { setIsFollowActive(false); setFingerPos(null); }, 3200);
+        } else {
+          setIsFollowActive(false);
+        }
+      }}
+      onTouchStart={(e) => {
+        const t = e.touches[0];
+        handleHoldStart(t.clientX, t.clientY, e.currentTarget.getBoundingClientRect());
+      }}
+      onTouchEnd={handleHoldEnd}
+    >
       {/* Background with water tint */}
       <div className="absolute inset-0">
         <motion.img 
@@ -654,6 +1356,91 @@ export default function Aquarium() {
       </div>
 
       <Bubbles count={25} />
+
+      {/* ── NOUVEAUX COMPOSANTS ──────────────────────────────────────────── */}
+      {/* Déchets organiques — augmentent si trop de poissons */}
+      <WasteParticles nitrateLevel={waterQuality.nitrates} isNight={isNightMode} shrimpsCleaning={waterQuality.nitrates > 20} />
+      {/* Plancton bioluminescent — visible uniquement la nuit */}
+      <PlanktonParticles moonPhase={lunarPhase} waterClarity={1 - waterQuality.nitrates / 50} isNight={isNightMode} tankMood={tankMood} />
+
+      {/* Tap ripples sur la vitre — 3 anneaux concentriques + point d'impact central */}
+      {tapRipples.map(r => (
+        <div key={r.id} className="absolute pointer-events-none"
+          style={{ left: `${r.x}%`, top: `${r.y}%`, transform: 'translate(-50%,-50%)', zIndex: 50 }}>
+          {[0, 1, 2].map(k => (
+            <motion.div key={k} className="absolute rounded-full pointer-events-none"
+              style={{
+                width: 8, height: 8, top: '50%', left: '50%',
+                transform: 'translate(-50%,-50%)',
+                border: `${1.5 - k * 0.3}px solid rgba(255,255,255,${0.55 - k * 0.12})`,
+              }}
+              initial={{ scale: 0.2, opacity: 0.8 - k * 0.15 }}
+              animate={{ scale: 7 + k * 2.5, opacity: 0 }}
+              transition={{ duration: 0.85 + k * 0.2, delay: k * 0.1, ease: 'easeOut' }}
+            />
+          ))}
+          {/* Point d'impact central */}
+          <motion.div className="absolute rounded-full bg-white/55 pointer-events-none"
+            style={{ width: 5, height: 5, top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }}
+            initial={{ scale: 1, opacity: 0.8 }}
+            animate={{ scale: 0.1, opacity: 0 }}
+            transition={{ duration: 0.22 }}
+          />
+        </div>
+      ))}
+
+      {/* 💧 Double-tap → grosse bulle montante */}
+      {giantBubbles.map(b => {
+        // 🏁 Compétition bulle — 2 poissons joueurs foncent vers la bulle
+        const racers = fishInTank
+          .map((fish, idx) => ({ fish, idx }))
+          .filter(({ idx }) => fishPersonalities[idx]?.trait === "playful" || fishPersonalities[idx]?.curiosity > 0.65)
+          .slice(0, 2);
+        return (
+          <div key={b.id} className="absolute inset-0 pointer-events-none" style={{ zIndex: 50 }}>
+            <motion.div className="absolute rounded-full pointer-events-none"
+              style={{ zIndex: 50 }}
+              initial={{ x: `${b.x}%`, y: `${b.y}%`, translateX: "-50%", translateY: "-50%", opacity: 0.8, scale: 0.3 }}
+              animate={{ y: [`${b.y}%`, `${b.y - 50}%`], scale: [0.3, 1.6, 2.2], opacity: [0.8, 0.55, 0] }}
+              transition={{ duration: 2.2, ease: "easeOut" }}>
+              <div style={{ width: 48, height: 48, borderRadius: "50%",
+                background: "radial-gradient(circle at 35% 35%, rgba(255,255,255,0.7) 0%, rgba(130,210,255,0.35) 50%, rgba(80,170,255,0.15) 80%, transparent 100%)",
+                border: "1.5px solid rgba(200,240,255,0.7)", boxShadow: "0 0 18px 4px rgba(100,200,255,0.25)" }} />
+            </motion.div>
+            {racers.map(({ fish, idx }) => {
+              const s = fishStyles[idx] ?? getFishStyle(idx);
+              const startLeft = s.startX;
+              const startTop = s.startY;
+              const offsetX = (idx === 0 ? 12 : -12);
+              return (
+                <motion.div key={`race-${fish.id}-${b.id}`} className="absolute w-10 h-10 pointer-events-none"
+                  style={{ left: startLeft, top: startTop, zIndex: 51 }}
+                  initial={{ x: 0, y: 0, scale: 1 }}
+                  animate={{
+                    x: [`${b.x - parseFloat(startLeft) + offsetX}%`, 0],
+                    y: [`${b.y - parseFloat(s.startY)}%`, 0],
+                    scale: [1.2, 1],
+                  }}
+                  transition={{ duration: 1.1, ease: [0.1, 0, 0.3, 1], delay: idx * 0.15 }}>
+                  <SafeImage src={fish.image} mobileSrc={fish.imageMobile} alt="" className="w-full h-full object-contain" fallbackClassName="w-full h-full" />
+                </motion.div>
+              );
+            })}
+          </div>
+        );
+      })}
+
+
+      {/* Aquarium mood tint */}
+      {tankMood === "stressed" && (
+        <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 2, background: "radial-gradient(ellipse at center, transparent 60%, rgba(255,80,40,0.08) 100%)" }} />
+      )}
+      {tankMood === "chaotic" && (
+        <motion.div className="absolute inset-0 pointer-events-none" style={{ zIndex: 2, background: "rgba(255,50,30,0.08)" }}
+          animate={{ opacity: [0.08, 0.16, 0.08] }} transition={{ duration: 2, repeat: Infinity }}
+        />
+      )}
+      {/* ─────────────────────────────────────────────────────────────────── */}
 
       {/* Seasonal tint - always visible */}
       <div 
@@ -782,6 +1569,45 @@ export default function Aquarium() {
         </>
       )}
 
+      {/* 🌌 Mode Nuit Profonde — obscurité totale + halos bioluminescents */}
+      {deepNightMode && (
+        <>
+          {/* Couche d'obscurité profonde */}
+          <motion.div className="absolute inset-0 pointer-events-none z-7"
+            style={{ background: "rgba(0,2,18,0.62)" }}
+            animate={{ opacity: [0.55, 0.68, 0.55] }}
+            transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+          />
+          {/* Vignetage circulaire */}
+          <div className="absolute inset-0 pointer-events-none z-7"
+            style={{ background: "radial-gradient(ellipse at 50% 50%, transparent 35%, rgba(0,1,12,0.75) 100%)" }}
+          />
+          {/* Reflets abyssaux (halos cyan qui dérivent lentement) */}
+          {[...Array(4)].map((_, k) => (
+            <motion.div key={`abyss-${k}`} className="absolute rounded-full pointer-events-none z-7"
+              style={{
+                width: `${60 + k * 25}px`, height: `${60 + k * 25}px`,
+                background: `radial-gradient(circle, hsla(${190 + k*20},100%,65%,0.07) 0%, transparent 70%)`,
+                top: `${20 + k * 17}%`, left: `${15 + k * 20}%`,
+                filter: "blur(8px)",
+              }}
+              animate={{ x: [-15, 20, -10, 15, -15], y: [-8, 12, -6, 8, -8], opacity: [0.4, 0.9, 0.5, 0.8, 0.4] }}
+              transition={{ duration: 14 + k * 3, repeat: Infinity, ease: "easeInOut" }}
+            />
+          ))}
+          {/* 🧘 Zen hint — tap to exit deep night mode */}
+          <motion.button
+            className="absolute z-[40] pointer-events-auto"
+            style={{ bottom: "18px", left: "50%", transform: "translateX(-50%)", background: "none", border: "none" }}
+            animate={{ opacity: [0.2, 0.45, 0.2] }}
+            transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
+            onClick={() => setDeepNightMode(false)}
+          >
+            <span className="text-[9px] text-white/40 tracking-[0.35em] uppercase font-light">Toucher pour quitter</span>
+          </motion.button>
+        </>
+      )}
+
       {/* Dynamic sunlight based on time of day */}
       {isDayTime && !isNightMode && (
         <motion.div
@@ -828,6 +1654,20 @@ export default function Aquarium() {
           />
         ))}
       </div>
+
+      {/* Nitrate green tint — subtle algae bloom visual when water quality degrades */}
+      <AnimatePresence>
+        {waterQuality.nitrates > 30 && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: Math.min(0.18, (waterQuality.nitrates - 30) * 0.006) }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 3 }}
+            className="absolute inset-0 pointer-events-none z-[9]"
+            style={{ background: 'linear-gradient(to bottom, transparent 30%, rgba(40,120,40,0.25) 100%)' }}
+          />
+        )}
+      </AnimatePresence>
 
       {/* Filter-based algae overlay - appears when water quality is bad */}
       <AnimatePresence>
@@ -887,19 +1727,24 @@ export default function Aquarium() {
       <BokehEffect />
 
       {/* Light rays from surface */}
-      <LightRays count={6} intensity={lightIntensity} />
+      <LightRays count={6} intensity={lightIntensity} isNight={isNightMode} moonPhase={lunarPhase} />
 
       {/* Surface reflections and caustics */}
       <SurfaceReflections />
 
       {/* Ambient music system */}
-      <AmbientMusic theme={theme.id} volume={soundEnabled ? (asrmMode ? 0.003 : 0.05) : 0} season={season} />
+      <AmbientMusic theme={theme.id} volume={soundEnabled ? (isAbyssalBiome ? 0.006 : deepNightMode ? 0.018 : asrmMode ? 0.003 : 0.05) : 0} season={season} tankMood={tankMood} />
 
       {/* Fish swimming sounds */}
-      <FishSounds fishCount={fishInTank.length} volume={soundEnabled ? (asrmMode ? 0.003 : 0.03) : 0} />
+      <FishSounds
+        fishCount={fishInTank.length}
+        volume={soundEnabled ? (asrmMode ? 0.003 : 0.03) : 0}
+        fishXPositions={Object.values(fishPositions).map(p => p.x)}
+      />
 
       {/* ASMR mode enhanced sounds */}
-      <ASMRSounds enabled={asrmMode && soundEnabled} volume={0.05} isRaining={false} isNight={isNightMode} />
+      <ASMRSounds enabled={asrmMode && soundEnabled} volume={0.05} isRaining={weather === "rain" || weather === "storm"} isNight={isNightMode} />
+      {soundEnabled && <WaterSounds volume={0.12} />}
 
       {/* Achievement unlock toast */}
       <AnimatePresence>
@@ -1095,6 +1940,263 @@ export default function Aquarium() {
           </motion.div>
         )}
 
+        {/* 🏁 Playful chase — two fish dash at each other repeatedly */}
+        {showRareEvent === "playful-chase" && schoolFish.length >= 2 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute inset-0 pointer-events-none z-10">
+            {schoolFish.slice(0, 2).map((fish, i) => (
+              <motion.div key={`chase-${fish.id}-${i}`}
+                className="absolute w-12 h-12"
+                style={{ top: "40%", left: i === 0 ? "20%" : "70%" }}
+                animate={{ x: i === 0 ? [0, 160, 0, 160, 0] : [0, -160, 0, -160, 0], y: [0, -15, 5, -10, 0], scaleX: i === 0 ? [1,1,1,-1,-1] : [-1,-1,-1,1,1] }}
+                transition={{ duration: 2.4 + i * 0.2, repeat: Infinity, ease: "easeInOut" }}>
+                <SafeImage src={fish.image} mobileSrc={fish.imageMobile} alt="" className="w-full h-full object-contain drop-shadow-xl" fallbackClassName="w-full h-full" />
+                {/* Trail de bulles derrière chaque poisson en course */}
+                {[0, 1, 2].map(k => (
+                  <motion.div key={`race-bubble-${k}`}
+                    className="absolute rounded-full pointer-events-none"
+                    style={{
+                      width: `${5 - k}px`, height: `${5 - k}px`,
+                      background: 'rgba(180,225,255,0.7)',
+                      left: i === 0 ? `${-8 - k * 8}px` : `${8 + k * 8}px`,
+                      top: '50%', transform: 'translateY(-50%)',
+                    }}
+                    animate={{ opacity: [0, 0.8, 0], scale: [0.5, 1, 1.6], y: [0, -6 + k * 2, -12 + k * 3] }}
+                    transition={{ duration: 0.55 + k * 0.12, repeat: Infinity, ease: 'easeOut', delay: k * 0.1 }}
+                  />
+                ))}
+              </motion.div>
+            ))}
+            {/* Ligne d'arrêvée au centre */}
+            <motion.div className="absolute pointer-events-none"
+              style={{ top: '36%', left: '49%', width: '2px', height: '18%', background: 'linear-gradient(to bottom, transparent, rgba(255,255,255,0.3), transparent)' }}
+              animate={{ opacity: [0.3, 0.8, 0.3] }}
+              transition={{ duration: 1, repeat: Infinity, ease: 'easeInOut' }}
+            />
+          </motion.div>
+        )}
+
+        {/* 🧘 Group meditation — lazy fish hover quietly in a cluster */}
+        {showRareEvent === "meditation" && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute inset-0 pointer-events-none z-10">
+            {/* Zen glow aura */}
+            <motion.div className="absolute pointer-events-none"
+              style={{ top: '44%', left: '50%', transform: 'translate(-50%,-50%)', width: 140, height: 70, borderRadius: '50%',
+                background: 'radial-gradient(ellipse, rgba(130,200,255,0.13) 0%, transparent 70%)', filter: 'blur(14px)' }}
+              animate={{ scale: [1, 1.18, 1], opacity: [0.35, 0.8, 0.35] }}
+              transition={{ duration: 5, repeat: Infinity, ease: 'easeInOut' }}
+            />
+            {/* Synchronized fish float */}
+            {schoolFish.slice(0, 4).map((fish, i) => (
+              <motion.div key={`med-${fish.id}-${i}`} className="absolute w-10 h-10"
+                style={{ top: `${40 + (i % 2) * 12}%`, left: `${24 + i * 13}%` }}
+                animate={{ y: [0, -5, 0, 5, 0], x: [0, 2, 0, -2, 0], scale: [1, 1.04, 1, 1.03, 1], opacity: [0.75, 1, 0.8, 1, 0.75] }}
+                transition={{ duration: 4 + i * 0.6, repeat: Infinity, ease: 'easeInOut', delay: i * 0.28 }}>
+                <SafeImage src={fish.image} mobileSrc={fish.imageMobile} alt="" className="w-full h-full object-contain"
+                  style={{ filter: 'drop-shadow(0 0 5px rgba(130,200,255,0.45))' }} fallbackClassName="w-full h-full" />
+              </motion.div>
+            ))}
+            {/* Zen bubbles */}
+            {[0, 1, 2].map(k => (
+              <motion.div key={`mzb-${k}`} className="absolute rounded-full pointer-events-none"
+                style={{ width: 8 + k * 3, height: 8 + k * 3, left: `${33 + k * 13}%`, top: '40%',
+                  border: '1px solid rgba(180,230,255,0.5)', background: 'rgba(180,230,255,0.06)' }}
+                animate={{ y: [0, -28, -55], opacity: [0, 0.7, 0] }}
+                transition={{ duration: 3 + k * 0.8, repeat: Infinity, delay: k * 1.1, ease: 'easeOut' }}
+              />
+            ))}
+            <motion.div className="absolute text-[11px] tracking-[4px] text-cyan-200/55 font-light pointer-events-none"
+              style={{ top: '26%', left: '50%', transform: 'translateX(-50%)', whiteSpace: 'nowrap' }}
+              animate={{ opacity: [0, 0.65, 0] }}
+              transition={{ duration: 5, repeat: Infinity }}>✦ Z E N ✦</motion.div>
+          </motion.div>
+        )}
+
+        {/* 👑 Dominance challenge — two dominant fish circle each other */}
+        {showRareEvent === "dominance-challenge" && schoolFish.length >= 2 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute inset-0 pointer-events-none z-10">
+            {schoolFish.slice(0, 2).map((fish, i) => {
+              const r = 40; const base = (i / 2) * Math.PI * 2;
+              const xKf = Array.from({ length: 37 }, (_, k) => r * Math.cos(base + (k / 36) * Math.PI * 2));
+              const yKf = Array.from({ length: 37 }, (_, k) => r * Math.sin(base + (k / 36) * Math.PI * 2) * 0.5);
+              return (
+                <motion.div key={`dom-${fish.id}-${i}`} className="absolute w-12 h-12"
+                  style={{ top: "40%", left: "45%", translateX: "-50%", translateY: "-50%" }}
+                  animate={{ x: xKf, y: yKf, scale: [1, 1.08, 1, 1.05, 1] }}
+                  transition={{ duration: 4, repeat: Infinity, ease: "linear" }}>
+                  <SafeImage src={fish.image} mobileSrc={fish.imageMobile} alt="" className="w-full h-full object-contain drop-shadow-xl" fallbackClassName="w-full h-full" />
+                </motion.div>
+              );
+            })}
+            <motion.div className="absolute top-[35%] left-1/2 -translate-x-1/2 text-xl pointer-events-none"
+              animate={{ opacity: [0,1,0], scale:[0.8,1.3,0.8] }} transition={{ duration: 1.5, repeat: Infinity }}>👑</motion.div>
+          </motion.div>
+        )}
+
+        {/* 🌌 Chorégraphie mystique — eau parfaite + nuit + 0 stress */}
+        {showRareEvent === "choreography" && fishInTank.length >= 3 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute inset-0 pointer-events-none z-10">
+            {/* Halo central tournant */}
+            <motion.div className="absolute" style={{ top: "45%", left: "50%", transform: "translate(-50%,-50%)" }}
+              animate={{ rotate: [0, 360] }} transition={{ duration: 18, repeat: Infinity, ease: "linear" }}>
+              {[0,1,2,3,4,5].map(k => (
+                <motion.div key={`halo-${k}`} className="absolute rounded-full"
+                  style={{
+                    width: 8, height: 8,
+                    background: `hsla(${185 + k * 30},100%,75%,0.9)`,
+                    top: `${Math.sin((k/6)*Math.PI*2) * 70}px`,
+                    left: `${Math.cos((k/6)*Math.PI*2) * 70}px`,
+                    filter: "blur(3px)",
+                    boxShadow: `0 0 8px 3px hsla(${185 + k * 30},100%,75%,0.7)`,
+                  }}
+                  animate={{ opacity: [0.5, 1, 0.5], scale: [0.8, 1.3, 0.8] }}
+                  transition={{ duration: 1.5 + k * 0.2, repeat: Infinity, ease: "easeInOut" }}
+                />
+              ))}
+            </motion.div>
+            {/* Poissons en ballet orbital */}
+            {fishInTank.slice(0, 5).map((fish, i) => {
+              const total = Math.min(fishInTank.length, 5);
+              const r = 80 + i * 12;
+              const startAngle = (i / total) * Math.PI * 2;
+              const xKf = Array.from({ length: 37 }, (_, k) => r * Math.cos(startAngle + (k / 36) * Math.PI * 2));
+              const yKf = Array.from({ length: 37 }, (_, k) => r * 0.45 * Math.sin(startAngle + (k / 36) * Math.PI * 2));
+              return (
+                <motion.div key={`cho-${fish.id}-${i}`} className="absolute w-10 h-10"
+                  style={{ top: "48%", left: "50%", translateX: "-50%", translateY: "-50%",
+                    filter: "drop-shadow(0 0 6px cyan)" }}
+                  animate={{ x: xKf, y: yKf }}
+                  transition={{ duration: 7 + i * 1.2, repeat: Infinity, ease: "linear" }}>
+                  <SafeImage src={fish.image} mobileSrc={fish.imageMobile} alt="" className="w-full h-full object-contain" fallbackClassName="w-full h-full" />
+                </motion.div>
+              );
+            })}
+            {/* Étoiles scintillantes */}
+            {[...Array(12)].map((_, k) => (
+              <motion.div key={`star-cho-${k}`} className="absolute rounded-full pointer-events-none"
+                style={{ width: 3, height: 3, top: `${15 + Math.random() * 65}%`, left: `${5 + Math.random() * 88}%`,
+                  background: "white", filter: "blur(0.5px)" }}
+                animate={{ opacity: [0, 1, 0], scale: [0.5, 1.5, 0.5] }}
+                transition={{ duration: 1.2 + Math.random() * 1.5, repeat: Infinity, delay: Math.random() * 2 }}
+              />
+            ))}
+            <motion.div className="absolute bottom-[18%] left-1/2 -translate-x-1/2 text-lg font-bold text-cyan-200 tracking-widest pointer-events-none"
+              style={{ textShadow: "0 0 12px cyan" }}
+              animate={{ opacity: [0, 1, 0] }} transition={{ duration: 3, repeat: Infinity }}>
+              ✦ Ballet des Profondeurs ✦
+            </motion.div>
+          </motion.div>
+        )}
+
+        {/* ✨ Ballet luminescent — méduse + hippocampe synchronisés la nuit */}
+        {showRareEvent === "luminous-ballet" && (() => {
+          const jelly = fishInTank.find(f => f.id === "jellyfish");
+          const seahorse = fishInTank.find(f => f.id === "seahorse");
+          if (!jelly || !seahorse) return null;
+          return (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 pointer-events-none z-10">
+              {/* Synchronized glow aura */}
+              <motion.div className="absolute" style={{ top: "38%", left: "50%", transform: "translate(-50%,-50%)" }}
+                animate={{ scale: [1, 1.5, 1], opacity: [0.2, 0.5, 0.2] }}
+                transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}>
+                <div style={{ width: 160, height: 80, borderRadius: "50%",
+                  background: "radial-gradient(ellipse, rgba(0,255,220,0.18) 0%, transparent 70%)", filter: "blur(10px)" }} />
+              </motion.div>
+              {/* Jellyfish pulsing */}
+              <motion.div className="absolute w-16 h-16"
+                style={{ top: "30%", left: "38%" }}
+                animate={{ y: [0, -18, 4, -12, 0], scale: [1, 1.12, 0.95, 1.08, 1] }}
+                transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}>
+                <SafeImage src={jelly.image} mobileSrc={jelly.imageMobile} alt="" className="w-full h-full object-contain"
+                  style={{ filter: "drop-shadow(0 0 10px cyan) brightness(1.3)" }} fallbackClassName="w-full h-full" />
+              </motion.div>
+              {/* Seahorse sync */}
+              <motion.div className="absolute w-14 h-14"
+                style={{ top: "32%", left: "56%" }}
+                animate={{ y: [0, -14, 6, -10, 0], scale: [1, 1.08, 0.97, 1.05, 1] }}
+                transition={{ duration: 3, repeat: Infinity, ease: "easeInOut", delay: 0.4 }}>
+                <SafeImage src={seahorse.image} mobileSrc={seahorse.imageMobile} alt="" className="w-full h-full object-contain"
+                  style={{ filter: "drop-shadow(0 0 8px #67e8f9) brightness(1.2)" }} fallbackClassName="w-full h-full" />
+              </motion.div>
+              {/* Sync flash pulses */}
+              {[...Array(5)].map((_, k) => (
+                <motion.div key={`lb-${k}`} className="absolute rounded-full pointer-events-none"
+                  style={{ width: 6, height: 6, top: `${28 + k * 8}%`, left: `${35 + k * 7}%`,
+                    background: "rgba(0,255,220,0.9)", filter: "blur(2px)" }}
+                  animate={{ opacity: [0, 1, 0], scale: [0.5, 2, 0.5] }}
+                  transition={{ duration: 3, repeat: Infinity, delay: k * 0.18, ease: "easeInOut" }}
+                />
+              ))}
+              <motion.div className="absolute bottom-[22%] left-1/2 -translate-x-1/2 text-sm text-cyan-200 tracking-widest pointer-events-none"
+                style={{ textShadow: "0 0 8px cyan" }}
+                animate={{ opacity: [0, 1, 0] }} transition={{ duration: 2.5, repeat: Infinity }}>
+                ✨ Ballet Luminescent ✨
+              </motion.div>
+            </motion.div>
+          );
+        })()}
+
+        {/* 🔵 Rotation circulaire — banc en cercle parfait, eau calme + soleil */}
+        {showRareEvent === "circular-rotation" && fishInTank.length >= 3 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute inset-0 pointer-events-none z-10">
+            {fishInTank.slice(0, 7).map((fish, i) => {
+              const total = Math.min(fishInTank.length, 7);
+              const startAngle = (i / total) * Math.PI * 2;
+              const radius = 65 + (i % 2) * 15;
+              const xKf = Array.from({ length: 37 }, (_, k) => radius * Math.cos(startAngle + (k / 36) * Math.PI * 2));
+              const yKf = Array.from({ length: 37 }, (_, k) => radius * 0.4 * Math.sin(startAngle + (k / 36) * Math.PI * 2));
+              return (
+                <motion.div key={`cr-${fish.id}-${i}`} className="absolute w-10 h-10"
+                  style={{ top: "46%", left: "50%", translateX: "-50%", translateY: "-50%" }}
+                  animate={{ x: xKf, y: yKf }}
+                  transition={{ duration: 8 + i * 0.5, repeat: Infinity, ease: "linear" }}>
+                  <SafeImage src={fish.image} mobileSrc={fish.imageMobile} alt="" className="w-full h-full object-contain" fallbackClassName="w-full h-full" />
+                </motion.div>
+              );
+            })}
+            {/* Centre lumineux */}
+            <motion.div className="absolute pointer-events-none"
+              style={{ top: "46%", left: "50%", transform: "translate(-50%,-50%)",
+                width: 50, height: 25, borderRadius: "50%",
+                background: "radial-gradient(ellipse, rgba(100,210,255,0.2) 0%, transparent 70%)", filter: "blur(8px)" }}
+              animate={{ scale: [1, 1.4, 1], opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+            />
+          </motion.div>
+        )}
+
+        {/* 🌊 Migration nocturne — groupe lumineux traverse lentement */}
+        {showRareEvent === "night-migration" && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute pointer-events-none z-10" style={{ top: "30%", left: 0, right: 0 }}>
+            <motion.div className="flex items-center gap-3"
+              initial={{ x: "-15%" }}
+              animate={{ x: ["−15%", "115%"] }}
+              transition={{ duration: 11, ease: "linear" }}>
+              {fishInTank.slice(0, 5).map((fish, i) => (
+                <motion.div key={`nm-${fish.id}-${i}`} className="relative w-10 h-10"
+                  style={{ filter: "drop-shadow(0 0 8px rgba(0,220,200,0.7)) brightness(1.2)" }}
+                  animate={{ y: [-4 + i * 3, 4 - i * 3, -4 + i * 3] }}
+                  transition={{ duration: 2.5 + i * 0.4, repeat: Infinity, ease: "easeInOut" }}>
+                  <SafeImage src={fish.image} mobileSrc={fish.imageMobile} alt="" className="w-full h-full object-contain" fallbackClassName="w-full h-full" />
+                  {/* Traînée lumineuse */}
+                  <motion.div className="absolute rounded-full pointer-events-none"
+                    style={{ width: 18, height: 8, right: "100%", top: "50%", transform: "translateY(-50%)",
+                      background: "linear-gradient(to left, rgba(0,220,200,0.5), transparent)", filter: "blur(2px)" }}
+                    animate={{ opacity: [0.3, 0.7, 0.3] }}
+                    transition={{ duration: 1.5, repeat: Infinity }}
+                  />
+                </motion.div>
+              ))}
+            </motion.div>
+          </motion.div>
+        )}
+
         {showRareEvent === "school" && (
           <motion.div
             initial={{ opacity: 0 }}
@@ -1163,6 +2265,510 @@ export default function Aquarium() {
             </motion.div>
           </motion.div>
         )}
+
+        {/* 🌀 Spirale duo — deux poissons se spiralisent autour d'un centre */}
+        {showRareEvent === "spiral-duo" && fishInTank.length >= 2 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute pointer-events-none z-10" style={{ top: "28%", left: "33%", width: 140, height: 140 }}>
+            {/* Central glow core */}
+            <motion.div className="absolute rounded-full pointer-events-none"
+              style={{ width: 28, height: 28, top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+                background: 'radial-gradient(circle, rgba(130,210,255,0.5) 0%, transparent 70%)', filter: 'blur(6px)' }}
+              animate={{ scale: [1, 1.6, 1], opacity: [0.4, 0.85, 0.4] }}
+              transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+            />
+            {fishInTank.slice(0, 2).map((fish, k) => {
+              const r = 44 + k * 10;
+              const xKf = Array.from({ length: 37 }, (_, j) => r * Math.cos((k * Math.PI) + (j / 36) * Math.PI * 2));
+              const yKf = Array.from({ length: 37 }, (_, j) => r * 0.55 * Math.sin((k * Math.PI) + (j / 36) * Math.PI * 2));
+              return (
+                <motion.div key={`sd-${fish.id}`} className="absolute w-10 h-10 pointer-events-none"
+                  style={{ top: '50%', left: '50%', marginLeft: -20, marginTop: -20 }}
+                  animate={{ x: xKf, y: yKf }}
+                  transition={{ duration: 5 + k * 1.2, repeat: Infinity, ease: 'linear' }}>
+                  <SafeImage src={fish.image} mobileSrc={fish.imageMobile} alt="" className="w-full h-full object-contain"
+                    style={{ filter: `drop-shadow(0 0 ${6 + k * 3}px rgba(100,200,255,${0.6 + k * 0.2}))` }} fallbackClassName="w-full h-full" />
+                  {/* Bubble trail behind each fish */}
+                  {[0, 1, 2].map(b => (
+                    <motion.div key={`sdb-${b}`} className="absolute rounded-full pointer-events-none"
+                      style={{ width: 4 - b, height: 4 - b, background: 'rgba(180,230,255,0.7)',
+                        top: '50%', left: '-4px', transform: 'translateY(-50%)' }}
+                      animate={{ opacity: [0, 0.7, 0], scale: [0.4, 1, 1.6] }}
+                      transition={{ duration: 0.8, delay: b * 0.18, repeat: Infinity, ease: 'easeOut' }}
+                    />
+                  ))}
+                </motion.div>
+              );
+            })}
+            {/* Spiral orbit path hint */}
+            <motion.div className="absolute rounded-full pointer-events-none"
+              style={{ width: 110, height: 62, top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+                border: '1px solid rgba(130,200,255,0.15)' }}
+              animate={{ opacity: [0.1, 0.4, 0.1], scale: [0.95, 1.05, 0.95] }}
+              transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
+            />
+          </motion.div>
+        )}
+
+        {/* �️ Cache-cache — phase 1: A se fige / phase 2: B se cache / phase 3: A cherche + B pointe la tête */}
+        {showRareEvent === "hide-seek" && fishInTank.length >= 2 && (() => {
+          const seeker = fishInTank[0]!;
+          const hider = fishInTank[1]!;
+          return (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 pointer-events-none z-10">
+              {/* Fish A (seeker) — freezes, then searches with erratic movement */}
+              <motion.div className="absolute w-11 h-11"
+                style={{ top: "42%", left: "42%" }}
+                animate={{
+                  x: [0, 0, 0, -18, 25, -30, 16, 0],
+                  y: [0, 0, 0, -10, 8, -14, 5, 0],
+                  opacity: [1, 0.6, 0.6, 1, 1, 1, 1, 1],
+                }}
+                transition={{ duration: 7, times: [0, 0.12, 0.25, 0.4, 0.55, 0.7, 0.85, 1], ease: "easeInOut" }}>
+                <SafeImage src={seeker.image} mobileSrc={seeker.imageMobile} alt="" className="w-full h-full object-contain" fallbackClassName="w-full h-full" />
+                {/* Question mark during search */}
+                <motion.div className="absolute -top-5 left-1/2 -translate-x-1/2 text-xs pointer-events-none"
+                  animate={{ opacity: [0, 0, 0, 0, 1, 1, 0.5, 0] }}
+                  transition={{ duration: 7, times: [0, 0.12, 0.25, 0.4, 0.55, 0.7, 0.85, 1] }}>❓</motion.div>
+              </motion.div>
+
+              {/* Fish B (hider) — darts behind rock at right edge, then peeks nose only */}
+              <motion.div className="absolute w-10 h-10"
+                style={{ top: "46%", right: 0 }}
+                animate={{
+                  x: [0, "100%", "100%", "88%", "92%", "88%", "100%"],
+                  opacity: [1, 1, 1, 1, 1, 1, 0],
+                }}
+                transition={{ duration: 7, times: [0, 0.28, 0.46, 0.60, 0.70, 0.80, 1], ease: "easeInOut" }}>
+                <SafeImage src={hider.image} mobileSrc={hider.imageMobile} alt="" className="w-full h-full object-contain" style={{ scaleX: -1 }} fallbackClassName="w-full h-full" />
+                {/* Dark edge gives impression fish is behind a rock */}
+                <div className="absolute left-0 top-0 bottom-0 w-3 pointer-events-none"
+                  style={{ background: 'linear-gradient(to right, rgba(38,42,54,0.8) 0%, transparent 100%)' }} />
+              </motion.div>
+              {/* Rock shadow framing the peek — fixed right strip */}
+              <div className="absolute right-0 top-0 bottom-0 w-9 pointer-events-none"
+                style={{ background: 'linear-gradient(to left, rgba(28,32,44,0.65) 0%, transparent 100%)' }} />
+
+              {/* Bubble explosion when found (end of event) */}
+              {[0,1,2,3,4].map(b => (
+                <motion.div key={`hs-b-${b}`} className="absolute w-2 h-2 rounded-full pointer-events-none"
+                  style={{ background: 'rgba(180,230,255,0.8)', top: '47%', right: '2%' }}
+                  animate={{ x: [0, (b - 2) * 20], y: [0, -(15 + b * 8)], opacity: [0, 0.9, 0], scale: [0.5, 1.2, 0.3] }}
+                  transition={{ duration: 0.7, delay: 4.8 + b * 0.06, ease: 'easeOut' }}
+                />
+              ))}
+            </motion.div>
+          );
+        })()}
+
+        {/* ⚡ Vague de banc — leader dash + cascade domino décalée */}
+        {showRareEvent === "wave-effect" && fishInTank.length >= 2 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute pointer-events-none z-10" style={{ top: "38%", left: 0, right: 0, height: 70 }}>
+            {fishInTank.slice(0, 6).map((fish, k) => {
+              const isLeader = k === 0;
+              return (
+                <motion.div key={`we-${fish.id}-${k}`} className="absolute"
+                  style={{ width: isLeader ? 48 : 40, height: isLeader ? 48 : 40, top: isLeader ? 0 : 8, left: `${8 + k * 16}%` }}
+                  animate={{
+                    y: [0, isLeader ? -30 : -18, 0, isLeader ? -22 : -12, 0],
+                    scale: [1, isLeader ? 1.15 : 1.05, 1, 1.04, 1],
+                  }}
+                  transition={{ duration: 2.4, delay: k * 0.18, repeat: Infinity, ease: "easeInOut" }}>
+                  <SafeImage src={fish.image} mobileSrc={fish.imageMobile} alt="" className="w-full h-full object-contain"
+                    style={isLeader ? { filter: "drop-shadow(0 0 5px rgba(130,200,255,0.7))" } : {}}
+                    fallbackClassName="w-full h-full" />
+                  {/* Leader gets speed streaks */}
+                  {isLeader && [0,1].map(s => (
+                    <motion.div key={`we-s-${s}`} className="absolute h-px pointer-events-none"
+                      style={{ width: 12+s*5, right: '105%', top: `${42+s*14}%`, background: 'rgba(180,220,255,0.6)' }}
+                      animate={{ opacity: [0, 0.9, 0], scaleX: [0, 1, 1.3] }}
+                      transition={{ duration: 0.4, delay: s * 0.08, repeat: Infinity, repeatDelay: 2, ease: 'easeOut' }}
+                    />
+                  ))}
+                </motion.div>
+              );
+            })}
+          </motion.div>
+        )}
+
+        {/* 🃏 Farceur — poisson fonce puis s'échappe */}
+        {showRareEvent === "trickster" && fishInTank.length >= 2 && (() => {
+          const tricksterIdx = fishPersonalities.findIndex(p => p.trait === 'playful');
+          const trickster = tricksterIdx >= 0 ? fishInTank[tricksterIdx]! : fishInTank[0]!;
+          const target = fishInTank.find(f => f !== trickster) ?? fishInTank[1]!;
+          return (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 pointer-events-none z-10">
+              <motion.div className="absolute w-10 h-10" style={{ top: '42%', left: '60%' }}
+                animate={{ x: [0, 0, 0, -9, 7, -4, 0], rotate: [0, 0, 0, -12, 9, -5, 0] }}
+                transition={{ duration: 3.5, ease: 'easeInOut' }}>
+                <SafeImage src={target.image} mobileSrc={target.imageMobile} alt="" className="w-full h-full object-contain" fallbackClassName="w-full h-full" />
+                <motion.div className="absolute -top-5 left-1/2 -translate-x-1/2 text-xs pointer-events-none"
+                  animate={{ opacity: [0, 0, 0, 0, 1, 0.6, 0] }}
+                  transition={{ duration: 3.5 }}>!!</motion.div>
+              </motion.div>
+              <motion.div className="absolute w-11 h-11" style={{ top: '43%', left: '14%' }}
+                animate={{ x: [0, 80, 108, 108, 38, -20], y: [0, 8, 3, 3, -28, -42], scale: [1, 1, 1.1, 1.1, 1, 1], opacity: [1, 1, 1, 1, 1, 0] }}
+                transition={{ duration: 4.2, times: [0, 0.32, 0.46, 0.56, 0.76, 1], ease: 'easeInOut' }}>
+                <SafeImage src={trickster.image} mobileSrc={trickster.imageMobile} alt="" className="w-full h-full object-contain"
+                  style={{ filter: 'drop-shadow(0 0 4px rgba(255,180,100,0.7))' }} fallbackClassName="w-full h-full" />
+                {[0, 1].map(b => (
+                  <motion.div key={`tr-b-${b}`} className="absolute rounded-full pointer-events-none"
+                    style={{ width: 4 - b, height: 4 - b, background: 'rgba(200,230,255,0.8)', left: '-5px', top: '50%', transform: 'translateY(-50%)' }}
+                    animate={{ opacity: [0, 0.8, 0], x: [0, -10], y: [0, b === 0 ? -4 : 4] }}
+                    transition={{ duration: 0.36, delay: 0.32 + b * 0.1, repeat: 4, repeatDelay: 0.44, ease: 'easeOut' }}
+                  />
+                ))}
+              </motion.div>
+              <motion.div className="absolute pointer-events-none"
+                style={{ bottom: '14%', left: '6%', width: 44, height: 22, background: 'radial-gradient(ellipse, rgba(80,55,38,0.4) 0%, transparent 70%)', borderRadius: '50%' }}
+                animate={{ opacity: [0, 0, 0, 0, 0.75, 0] }}
+                transition={{ duration: 4.2, ease: 'easeOut' }}
+              />
+            </motion.div>
+          );
+        })()}
+
+        {/* 🪸 Jeu du décor — poisson tourne autour d'un coral */}
+        {showRareEvent === "decor-play" && fishInTank.length >= 1 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute pointer-events-none z-10" style={{ bottom: "13%", left: "7%", width: 110, height: 110 }}>
+            {/* Coral glow */}
+            <motion.div className="absolute pointer-events-none"
+              style={{ bottom: 4, left: '50%', transform: 'translateX(-50%)', width: 44, height: 22,
+                background: 'radial-gradient(ellipse, rgba(255,145,110,0.32) 0%, transparent 70%)', filter: 'blur(4px)' }}
+              animate={{ opacity: [0.4, 0.9, 0.4], scale: [1, 1.2, 1] }}
+              transition={{ duration: 2.2, repeat: Infinity, ease: 'easeInOut' }}
+            />
+            {/* Fish A — orbits coral */}
+            <motion.div className="absolute w-10 h-10"
+              style={{ top: '50%', left: '50%', marginLeft: -20, marginTop: -20 }}
+              animate={{ rotate: [0, 360] }}
+              transition={{ duration: 4.5, repeat: Infinity, ease: 'linear' }}>
+              <motion.div style={{ x: 38, transformOrigin: '-38px center' }}>
+                <SafeImage src={fishInTank[0]!.image} mobileSrc={fishInTank[0]!.imageMobile} alt="" className="w-full h-full object-contain" fallbackClassName="w-full h-full" />
+              </motion.div>
+            </motion.div>
+            {/* Fish B — sweeps through arch */}
+            {fishInTank.length >= 2 && (
+              <motion.div className="absolute w-9 h-9" style={{ bottom: '2%' }}
+                animate={{ x: [-55, 125], y: [0, -6, 0] }}
+                transition={{ duration: 3.8, repeat: Infinity, ease: 'easeInOut', repeatDelay: 0.4 }}>
+                <SafeImage src={fishInTank[1]!.image} mobileSrc={fishInTank[1]!.imageMobile} alt="" className="w-full h-full object-contain"
+                  style={{ filter: 'drop-shadow(0 0 3px rgba(180,230,255,0.55))' }} fallbackClassName="w-full h-full" />
+              </motion.div>
+            )}
+            {/* Checkpoint sparkle */}
+            <motion.div className="absolute text-[9px] pointer-events-none" style={{ top: '14%', left: '64%' }}
+              animate={{ opacity: [0, 1, 0], scale: [0.7, 1.4, 0.7] }}
+              transition={{ duration: 2, repeat: Infinity, repeatDelay: 2.5, ease: 'easeInOut' }}>✦</motion.div>
+          </motion.div>
+        )}
+
+        {/* 🌊 Dérive de courant — poissons flottent avec le flux */}
+        {showRareEvent === "current-drift" && fishInTank.length >= 1 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute pointer-events-none z-10" style={{ top: "35%", left: 0, right: 0 }}>
+            <motion.div className="flex items-center gap-6"
+              animate={{ x: currentAngle === 0 ? ["-5%", "110%"] : ["110%", "-5%"] }}
+              transition={{ duration: 8, ease: "linear" }}>
+              {fishInTank.slice(0, 3).map((fish, k) => (
+                <motion.div key={`cd-${fish.id}-${k}`} className="relative w-10 h-10"
+                  style={{ scaleX: currentAngle === 0 ? 1 : -1 }}
+                  animate={{ y: [-4 + k * 4, 4 - k * 3, -4 + k * 4] }}
+                  transition={{ duration: 2 + k * 0.4, repeat: Infinity, ease: "easeInOut" }}>
+                  <SafeImage src={fish.image} mobileSrc={fish.imageMobile} alt="" className="w-full h-full object-contain" fallbackClassName="w-full h-full" />
+                </motion.div>
+              ))}
+            </motion.div>
+          </motion.div>
+        )}
+
+        {/* 🍼 Apprentissage de nage — adulte nage lentement, bébé suit en corrigeant sa trajectoire */}
+        {showRareEvent === "swim-lesson" && fishInTank.length >= 2 && (() => {
+          const babyFishId = fishInstances.find(fi => fi.isBaby)?.fishId;
+          const baby = babyFishId ? fishInTank.find(f => f.id === babyFishId) : fishInTank[fishInTank.length - 1];
+          const adult = fishInTank.find(f => f !== baby) ?? fishInTank[0];
+          if (!baby || !adult) return null;
+          return (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute pointer-events-none z-10" style={{ top: "36%", left: "8%", width: "78%" }}>
+              {/* Adult — steady slow undulating path */}
+              <motion.div className="absolute w-12 h-12"
+                animate={{ x: [0, 55, 110, 165, 110, 55, 0], y: [0, -8, 3, -5, 8, -2, 0] }}
+                transition={{ duration: 9, ease: "easeInOut", repeat: Infinity }}>
+                <SafeImage src={adult.image} mobileSrc={adult.imageMobile} alt="" className="w-full h-full object-contain" fallbackClassName="w-full h-full" />
+              </motion.div>
+              {/* Baby — follows with a wobble and slight positional lag */}
+              <motion.div className="absolute w-8 h-8" style={{ top: "18px" }}
+                animate={{ x: [-20, 35, 85, 138, 85, 35, -20], y: [4, -2, 10, 2, 14, 4, 4] }}
+                transition={{ duration: 9, ease: "easeInOut", repeat: Infinity, delay: 0.55 }}>
+                <SafeImage src={baby.image} mobileSrc={baby.imageMobile} alt="" className="w-full h-full object-contain"
+                  style={{ filter: "drop-shadow(0 0 4px rgba(150,220,255,0.8))" }} fallbackClassName="w-full h-full" />
+                {/* Baby correction bubble */}
+                <motion.div className="absolute w-2 h-2 rounded-full bg-white/40 pointer-events-none"
+                  style={{ top: "15%", right: "-5px" }}
+                  animate={{ opacity: [0, 0.8, 0], y: [0, -14, -22], scale: [0.4, 1, 1.6] }}
+                  transition={{ duration: 1.8, repeat: Infinity, repeatDelay: 0.9, ease: "easeOut" }}
+                />
+              </motion.div>
+              {/* Sparkle connecting adult and baby */}
+              <motion.div className="absolute text-[10px] pointer-events-none"
+                style={{ left: "25%", top: "-4px" }}
+                animate={{ opacity: [0, 1, 0], scale: [0.8, 1.2, 0.8], y: [0, -5, 0] }}
+                transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}>✨</motion.div>
+            </motion.div>
+          );
+        })()}
+
+        {/* 🫧 Jeu des bulles — poisson crée des bulles, bébé les chasse en zigzag */}
+        {showRareEvent === "bubble-game" && (() => {
+          const babyFishId = fishInstances.find(fi => fi.isBaby)?.fishId;
+          const baby = babyFishId ? fishInTank.find(f => f.id === babyFishId) : fishInTank[0];
+          const creator = fishInTank.find(f => f !== baby) ?? fishInTank[0];
+          if (!baby || !creator) return null;
+          return (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 pointer-events-none z-10">
+              {/* Bubble creator bobbing at bottom-left */}
+              <motion.div className="absolute w-11 h-11" style={{ bottom: "28%", left: "22%" }}
+                animate={{ y: [0, -6, 0, -4, 0], scale: [1, 1.05, 0.97, 1.03, 1] }}
+                transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}>
+                <SafeImage src={creator.image} mobileSrc={creator.imageMobile} alt="" className="w-full h-full object-contain" fallbackClassName="w-full h-full" />
+              </motion.div>
+              {/* Ascending bubbles */}
+              {[0, 1, 2].map(k => (
+                <motion.div key={`bgb-${k}`} className="absolute rounded-full pointer-events-none"
+                  style={{ width: `${13 + k * 4}px`, height: `${13 + k * 4}px`,
+                    left: `${20 + k * 8}%`,
+                    border: "1.5px solid rgba(180,230,255,0.75)", background: "rgba(180,230,255,0.1)" }}
+                  initial={{ bottom: "34%", opacity: 0 }}
+                  animate={{ bottom: [`34%`, `${52 + k * 6}%`], opacity: [0, 0.85, 0.6, 0], x: [0, k % 2 === 0 ? 8 : -8, 0] }}
+                  transition={{ duration: 3.5 + k * 0.6, repeat: Infinity, ease: "easeOut", delay: k * 1.0 }}
+                />
+              ))}
+              {/* Baby chasing bubbles in zigzag */}
+              <motion.div className="absolute w-8 h-8" style={{ bottom: "34%", left: "18%" }}
+                animate={{ x: [0, 55, 25, 95, 45, 0], y: [0, -28, -10, -55, -22, 0] }}
+                transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}>
+                <SafeImage src={baby.image} mobileSrc={baby.imageMobile} alt="" className="w-full h-full object-contain"
+                  style={{ filter: "drop-shadow(0 0 5px rgba(150,210,255,0.9))" }} fallbackClassName="w-full h-full" />
+              </motion.div>
+              {/* Pop when baby "reaches" a bubble */}
+              <motion.div className="absolute pointer-events-none rounded-full"
+                style={{ bottom: "52%", left: "38%", width: 16, height: 16,
+                  border: "2px solid rgba(150,220,255,0.9)", background: "rgba(180,240,255,0.25)" }}
+                animate={{ opacity: [0, 0, 1, 0], scale: [0.6, 0.6, 2.2, 3] }}
+                transition={{ duration: 0.5, delay: 2.2, repeat: Infinity, repeatDelay: 5.5, ease: "easeOut" }}
+              />
+            </motion.div>
+          );
+        })()}
+
+        {/* 👑 Défi amical — deux dominants face à face : gonflage, standoff, l'un cède */}
+        {showRareEvent === "friendly-challenge" && fishInTank.length >= 2 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute inset-0 pointer-events-none z-10">
+            {/* Fish A — left, advances, puffs up */}
+            <motion.div className="absolute w-12 h-12" style={{ top: "41%", left: "20%" }}
+              animate={{ x: [0, 44, 38, 32, 0], scale: [1, 1.02, 1.1, 1.07, 1] }}
+              transition={{ duration: 5, ease: "easeInOut" }}>
+              <SafeImage src={fishInTank[0]!.image} mobileSrc={fishInTank[0]!.imageMobile} alt="" className="w-full h-full object-contain drop-shadow-xl" fallbackClassName="w-full h-full" />
+            </motion.div>
+            {/* Fish B — right, advances, then retreats */}
+            <motion.div className="absolute w-12 h-12" style={{ top: "41%", left: "60%" }}
+              animate={{ x: [0, -34, -28, -20, 18], scale: [1, 1.02, 1.07, 1.04, 0.94] }}
+              transition={{ duration: 5, ease: "easeInOut" }}>
+              <SafeImage src={fishInTank[1]!.image} mobileSrc={fishInTank[1]!.imageMobile} alt="" className="w-full h-full object-contain drop-shadow-xl" style={{ scaleX: -1 }} fallbackClassName="w-full h-full" />
+            </motion.div>
+            {/* Crown float during standoff */}
+            <motion.div className="absolute top-[34%] left-1/2 -translate-x-1/2 text-base pointer-events-none"
+              animate={{ opacity: [0, 0, 1, 0.8, 0.8, 0], scale: [0.7, 0.9, 1.3, 1.1, 1.1, 0.7] }}
+              transition={{ duration: 5 }}>👑</motion.div>
+            {/* Tension bubbles at collision zone */}
+            {[0, 1, 2].map(k => (
+              <motion.div key={`fc-b-${k}`} className="absolute rounded-full bg-white/25 border border-white/35"
+                style={{ width: 5 + k * 2, height: 5 + k * 2, top: `${44 + k * 3}%`, left: `${44 + k * 5}%` }}
+                animate={{ opacity: [0, 0.8, 0], y: [0, -18 - k * 6], scale: [0.5, 1, 1.6] }}
+                transition={{ duration: 1.6, delay: 1.5 + k * 0.28, ease: "easeOut" }}
+              />
+            ))}
+          </motion.div>
+        )}
+
+        {/* 🏁 Défi territorial — poisson territorial se gonfle et fait un dash pour chasser l'intrus */}
+        {showRareEvent === "territory-dash" && fishInTank.length >= 2 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="absolute inset-0 pointer-events-none z-10">
+            {/* Zone glow */}
+            <motion.div className="absolute pointer-events-none"
+              style={{ top: "36%", left: "8%", width: "35%", height: "25%",
+                background: "radial-gradient(ellipse, rgba(255,175,50,0.15) 0%, transparent 70%)", borderRadius: "50%" }}
+              animate={{ opacity: [0, 1, 0.6, 0] }}
+              transition={{ duration: 2.5, ease: "easeOut" }}
+            />
+            {/* Intruder drifting in from the right */}
+            <motion.div className="absolute w-10 h-10" style={{ top: "44%", left: "55%" }}
+              animate={{ x: [-10, -50, -100], opacity: [1, 1, 0.5] }}
+              transition={{ duration: 2.2, delay: 1.5, ease: "easeIn" }}>
+              <SafeImage src={fishInTank[0]!.image} mobileSrc={fishInTank[0]!.imageMobile} alt="" className="w-full h-full object-contain opacity-80" style={{ scaleX: -1 }} fallbackClassName="w-full h-full" />
+            </motion.div>
+            {/* Territorial fish — puffs up then DASHES across */}
+            <motion.div className="absolute w-12 h-12" style={{ top: "42%", left: "14%" }}
+              animate={{ x: [0, 0, 5, 125, 90, 22, 0], y: [0, 0, -3, 0, 3, 0, 0], scale: [1, 1.12, 1.18, 1, 1, 1, 1] }}
+              transition={{ duration: 4.2, times: [0, 0.20, 0.32, 0.50, 0.65, 0.82, 1], ease: "easeInOut" }}>
+              <SafeImage src={fishInTank[1]!.image} mobileSrc={fishInTank[1]!.imageMobile} alt="" className="w-full h-full object-contain drop-shadow-xl" fallbackClassName="w-full h-full" />
+              {/* Speed-line streaks on dash */}
+              {[0, 1, 2].map(k => (
+                <motion.div key={`td-sl-${k}`} className="absolute h-px pointer-events-none"
+                  style={{ width: `${16 + k * 6}px`, right: "100%", top: `${35 + k * 14}%`, background: "rgba(180,220,255,0.65)" }}
+                  animate={{ opacity: [0, 0.9, 0], scaleX: [0, 1, 1.3] }}
+                  transition={{ duration: 0.28, delay: 1.35 + k * 0.05, ease: "easeOut" }}
+                />
+              ))}
+            </motion.div>
+          </motion.div>
+        )}
+
+        {/* 🫧 Course aux bulles géantes — grosse bulle monte, 2 poissons font la course */}
+        {showRareEvent === "giant-bubble-race" && fishInTank.length >= 2 && (() => {
+          const racers = fishInTank.slice(0, 2);
+          return (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 pointer-events-none z-10">
+              {/* Big rising bubble */}
+              <motion.div className="absolute pointer-events-none rounded-full"
+                style={{ width: 68, height: 68, bottom: '8%', left: '46%',
+                  border: '2.5px solid rgba(160,225,255,0.7)', background: 'rgba(160,225,255,0.07)',
+                  boxShadow: 'inset 0 0 18px rgba(160,225,255,0.3)' }}
+                animate={{ y: [0, -180, -320], opacity: [0, 1, 1, 0], scale: [0.6, 1, 1.1, 1.5] }}
+                transition={{ duration: 5, ease: 'easeOut' }}>
+                {/* Bubble shine */}
+                <div className="absolute w-3 h-2 rounded-full bg-white/40" style={{ top: '18%', left: '22%', transform: 'rotate(-30deg)', filter: 'blur(1px)' }} />
+              </motion.div>
+              {/* Racer A — dashes up from left */}
+              <motion.div className="absolute w-11 h-11" style={{ bottom: '12%', left: '28%' }}
+                animate={{ x: [0, 18, 40], y: [0, -100, -220], scale: [1, 1.05, 0.95] }}
+                transition={{ duration: 4.5, ease: 'easeInOut' }}>
+                <SafeImage src={racers[0]!.image} mobileSrc={racers[0]!.imageMobile} alt="" className="w-full h-full object-contain"
+                  style={{ filter: 'drop-shadow(0 0 4px rgba(100,200,255,0.6))' }} fallbackClassName="w-full h-full" />
+              </motion.div>
+              {/* Racer B — dashes up from right */}
+              <motion.div className="absolute w-11 h-11" style={{ bottom: '12%', right: '28%' }}
+                animate={{ x: [0, -18, -38], y: [0, -85, -205], scale: [1, 1.05, 0.95] }}
+                transition={{ duration: 4.8, ease: 'easeInOut' }}>
+                <SafeImage src={racers[1]!.image} mobileSrc={racers[1]!.imageMobile} alt="" className="w-full h-full object-contain"
+                  style={{ filter: 'drop-shadow(0 0 4px rgba(200,160,255,0.6))' }} fallbackClassName="w-full h-full" />
+              </motion.div>
+              {/* Pop effect */}
+              {[0,1,2,3,4,5].map(k => (
+                <motion.div key={`gbr-p-${k}`} className="absolute rounded-full pointer-events-none"
+                  style={{ width: 6, height: 6, bottom: '50%', left: '47%', background: 'rgba(180,230,255,0.8)' }}
+                  animate={{ x: [0, Math.cos((k/6)*Math.PI*2) * 30], y: [0, Math.sin((k/6)*Math.PI*2) * 30], opacity: [0, 0, 1, 0], scale: [0.5, 0.5, 1.5, 0] }}
+                  transition={{ duration: 0.5, delay: 4.6 + k * 0.04, ease: 'easeOut' }}
+                />
+              ))}
+            </motion.div>
+          );
+        })()}
+
+        {/* � Comportement émergent — groupe playful invente trajectoire, change de leader */}
+        {showRareEvent === "emergent-group" && (() => {
+          const playfulFish = fishInTank.filter((_f, idx) =>
+            fishPersonalities[idx]?.trait === "playful" || fishPersonalities[idx]?.trait === "curious"
+          ).slice(0, 3);
+          if (playfulFish.length < 2) return null;
+          // 3 waypoint columns (probabilistic, leader shifts every 4s via animation delay)
+          const paths = [
+            { x: ["8%","55%","80%","35%","8%"],  y: ["42%","28%","50%","62%","42%"] },
+            { x: ["15%","60%","72%","28%","15%"], y: ["52%","35%","44%","55%","52%"] },
+            { x: ["22%","48%","85%","40%","22%"], y: ["46%","40%","56%","48%","46%"] },
+          ];
+          return (
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 pointer-events-none z-10">
+              {playfulFish.map((fish, k) => {
+                const path = paths[k % paths.length]!;
+                const isLeader = k === 0;
+                return (
+                  <motion.div key={`eg-${fish.id}-${k}`}
+                    className="absolute pointer-events-none"
+                    style={{ width: isLeader ? 44 : 36, height: isLeader ? 44 : 36, left: 0, top: 0 }}
+                    animate={{ left: path.x, top: path.y }}
+                    transition={{ duration: isLeader ? 9 : 9.5 + k * 0.4, ease: "easeInOut", repeat: Infinity, delay: k * 1.4 }}>
+                    <SafeImage src={fish.image} mobileSrc={fish.imageMobile} alt=""
+                      className="w-full h-full object-contain"
+                      style={{ filter: isLeader
+                        ? "drop-shadow(0 0 6px rgba(130,220,255,0.85))"
+                        : `drop-shadow(0 0 3px rgba(130,220,255,${0.4 + k * 0.15}))` }}
+                      fallbackClassName="w-full h-full" />
+                    {/* Leader crown flash when it takes point after lap */}
+                    {isLeader && (
+                      <motion.div className="absolute text-[10px] pointer-events-none select-none"
+                        style={{ top: "-14px", left: "50%", transform: "translateX(-50%)" }}
+                        animate={{ opacity: [0, 1, 1, 0], y: [0, -3, -3, 0] }}
+                        transition={{ duration: 1.2, repeat: Infinity, repeatDelay: 7.8, ease: "easeInOut" }}>👑</motion.div>
+                    )}
+                    {/* Sparkle trail for each fish */}
+                    <motion.div className="absolute w-1.5 h-1.5 rounded-full pointer-events-none"
+                      style={{ background: `rgba(${isLeader ? '100,220,255' : '180,210,255'},0.8)`, left: "-5px", top: "50%", transform: "translateY(-50%)" }}
+                      animate={{ opacity: [0, 0.8, 0], scale: [0.5, 1.4, 0.5] }}
+                      transition={{ duration: 0.7, repeat: Infinity, delay: k * 0.22, ease: "easeOut" }}
+                    />
+                  </motion.div>
+                );
+              })}
+              {/* Trajectory hint dots — 4 faint waypoint markers */}
+              {["30%","55%","70%","42%"].map((lx, k) => (
+                <motion.div key={`eg-wp-${k}`} className="absolute rounded-full pointer-events-none"
+                  style={{ width: 5, height: 5, left: lx, top: ["38%","26%","50%","60%"][k],
+                    background: "rgba(120,210,255,0.35)", boxShadow: "0 0 5px rgba(120,210,255,0.4)" }}
+                  animate={{ opacity: [0, 0.6, 0], scale: [0.5, 1.3, 0.5] }}
+                  transition={{ duration: 2.2, repeat: Infinity, delay: k * 2.1, ease: "easeInOut" }}
+                />
+              ))}
+            </motion.div>
+          );
+        })()}
+
+        {/* �👆 Suis le doigt — 2-3 poissons joueurs suivent le curseur lentement */}
+        {isFollowActive && fingerPos && fishInTank.length >= 1 && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            transition={{ duration: 0.4 }}
+            className="absolute inset-0 pointer-events-none z-10">
+            {fishInTank.slice(0, 3).map((fish, k) => (
+              <motion.div key={`ff-${fish.id}-${k}`}
+                className="absolute w-10 h-10"
+                style={{ left: 0, top: 0 }}
+                animate={{
+                  x: `calc(${fingerPos.x}% - ${20 + k * 6}px + ${(k - 1) * 18}px)`,
+                  y: `calc(${fingerPos.y}% - 20px + ${(k - 1) * 14}px)`,
+                }}
+                transition={{ type: 'spring', stiffness: 40 - k * 6, damping: 10 + k * 2 }}>
+                <SafeImage src={fish.image} mobileSrc={fish.imageMobile} alt="" className="w-full h-full object-contain"
+                  style={{ filter: `drop-shadow(0 0 ${4 + k}px rgba(120,210,255,0.6))` }} fallbackClassName="w-full h-full" />
+                {/* Subtle sparkle trail */}
+                <motion.div className="absolute w-1.5 h-1.5 rounded-full pointer-events-none"
+                  style={{ background: 'rgba(200,240,255,0.8)', left: '-4px', top: '50%', transform: 'translateY(-50%)' }}
+                  animate={{ opacity: [0, 0.7, 0], scale: [0.5, 1.2, 0.5] }}
+                  transition={{ duration: 0.8, repeat: Infinity, delay: k * 0.2, ease: 'easeOut' }}
+                />
+              </motion.div>
+            ))}
+            {/* Finger target ring */}
+            <motion.div className="absolute rounded-full pointer-events-none"
+              style={{ width: 24, height: 24,
+                left: `calc(${fingerPos.x}% - 12px)`,
+                top: `calc(${fingerPos.y}% - 12px)`,
+                border: '1.5px solid rgba(180,230,255,0.55)', background: 'rgba(180,230,255,0.06)' }}
+              animate={{ scale: [1, 1.3, 1], opacity: [0.4, 0.8, 0.4] }}
+              transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+            />
+          </motion.div>
+        )}
+
       </AnimatePresence>
 
       {/* UI layer */}
@@ -1229,7 +2835,7 @@ export default function Aquarium() {
                   </div>
                   <div>
                     <p className="text-[9px] text-muted-foreground">Temp</p>
-                    <p className="text-xs font-bold text-foreground">{currentTemperature}°C</p>
+                    <p className="text-xs font-bold text-foreground">{dynamicTemp}°C</p>
                   </div>
                 </div>
 
@@ -1276,7 +2882,7 @@ export default function Aquarium() {
                     <div className="flex items-center gap-1">
                       <p className="text-[8px] text-muted-foreground">NO₃:</p>
                       <p className={`text-[10px] font-bold ${waterQuality.nitrates > 25 ? 'text-orange-400' : 'text-green-400'}`}>
-                        {waterQuality.nitrates}
+                        {Math.round(waterQuality.nitrates)}
                       </p>
                     </div>
                   </div>
@@ -1344,19 +2950,414 @@ export default function Aquarium() {
             </AnimatePresence>
           </motion.div>
 
+          {/* Aquarium rank & score badge — tap to expand breakdown */}
+          <motion.div className="relative z-20 px-5 mb-1 pointer-events-auto"
+            animate={{ opacity: deepNightMode ? 0 : 1 }}
+            transition={{ duration: 2 }}
+          >
+            <motion.button
+              className="w-full glass-nav rounded-xl px-3 py-1.5 flex items-center justify-between"
+              onClick={() => setShowScoreBreakdown(v => !v)}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.8 }}
+            >
+              <span className="text-[10px] text-foreground/60 font-medium">{aquariumRank}</span>
+              <div className="flex items-center gap-1">
+                <div className="w-16 h-1 rounded-full bg-foreground/10 overflow-hidden">
+                  <motion.div className="h-full rounded-full bg-accent" animate={{ width: `${aquariumScore}%` }} transition={{ duration: 1.2, ease: "easeOut" }} />
+                </div>
+                <span className="text-[10px] text-accent font-bold">{aquariumScore}</span>
+              </div>
+              <span className="text-[10px] text-foreground/40">
+                {tankMood === "calm" ? "🌊 Calme" : tankMood === "balanced" ? "⚖️ Équilibré" : tankMood === "stressed" ? "⚠️ Stressé" : "🔴 Chaotique"}
+              </span>
+            </motion.button>
+            <AnimatePresence>
+              {showScoreBreakdown && (() => {
+                const sc = new Set(fishInTank.map(f => f.id)).size;
+                const ah = Object.values(fishHealths).length
+                  ? Math.round(Object.values(fishHealths).reduce((a, b) => a + b, 0) / Object.values(fishHealths).length)
+                  : 95;
+                const rb = Math.min(30, fishInTank.reduce((s, f) => s + (f.rarity === "legendary" ? 20 : f.rarity === "epic" ? 10 : f.rarity === "rare" ? 5 : 1), 0));
+                const hv = tankMood === "calm" ? 20 : tankMood === "balanced" ? 10 : 0;
+                const items = [
+                  { label: "Diversité", icon: "🐟", score: Math.min(64, sc * 8) },
+                  { label: "Santé moy.", icon: "❤️", score: Math.round(ah * 0.3) },
+                  { label: "Rareté", icon: "✨", score: rb },
+                  { label: "Harmonie", icon: "🌊", score: hv },
+                ];
+                return (
+                  <motion.div className="glass-nav rounded-xl px-3 py-2 grid grid-cols-2 gap-x-3 gap-y-2 absolute left-0 right-0 z-50"
+                    initial={{ opacity: 0, y: -6, scaleY: 0.8 }} animate={{ opacity: 1, y: 0, scaleY: 1 }}
+                    exit={{ opacity: 0, y: -6, scaleY: 0.8 }} transition={{ duration: 0.2 }}
+                    style={{ transformOrigin: 'top', top: 'calc(100% + 4px)' }}
+                  >
+                    {items.map(b => (
+                      <div key={b.label} className="flex items-center gap-1.5">
+                        <span className="text-sm">{b.icon}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[9px] text-foreground/50 truncate">{b.label}</p>
+                          <div className="flex items-center gap-1 mt-0.5">
+                            <div className="flex-1 h-0.5 rounded-full bg-foreground/10 overflow-hidden">
+                              <div className="h-full rounded-full bg-accent/70" style={{ width: `${Math.min(100, (b.score / 64) * 100)}%` }} />
+                            </div>
+                            <span className="text-[9px] text-foreground/60 shrink-0">+{b.score}</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </motion.div>
+                );
+              })()}
+            </AnimatePresence>
+          </motion.div>
+
       {/* Fish swimming area */}
-      <div className="fish-swimming-area relative z-10 flex-1 overflow-hidden min-h-0">
+      <motion.div className="fish-swimming-area gpu-layer relative z-10 flex-1 overflow-hidden min-h-0"
+        animate={
+          cameraFocus
+            ? { scale: cameraFocus.zoom, x: `${(50 - cameraFocus.x) * 0.04}%`, y: `${(48 - cameraFocus.y) * 0.04}%` }
+            : deepNightMode
+              ? { scale: 1.015, x: ['0%', '0.7%', '-0.4%', '0.3%', '0%'], y: ['0%', '0.45%', '-0.38%', '0.18%', '0%'], rotate: [0, 0.4, -0.3, 0.5, -0.2, 0] }
+              : { scale: 1, x: 0, y: 0 }
+        }
+        transition={
+          cameraFocus || !deepNightMode
+            ? { duration: 1.2, ease: "easeInOut" }
+            : { duration: 22, repeat: Infinity, ease: "easeInOut" }
+        }
+        style={{
+          filter: deepNightMode
+            ? "saturate(1.35) hue-rotate(200deg) brightness(0.68)"
+            : tankMood === "calm"
+            ? "saturate(1.08) brightness(1.02)"
+            : tankMood === "stressed"
+              ? "saturate(0.80) brightness(0.97)"
+              : tankMood === "chaotic"
+                ? "saturate(0.65) brightness(0.94)"
+                : undefined,
+        }}
+      >
 
         {/* === Aquarium decorations inside bounded fish area === */}
 
         {/* Animated coral decorations */}
-        <AnimatedCorals />
+        <AnimatedCorals nitrateLevel={waterQuality.nitrates} daysSinceInstall={Math.round((Date.now() - coralStartTimeRef.current) / 86400000)} />
 
         {/* Hiding rocks for fish to play around */}
         <HidingRocks />
 
         {/* Dynamic algae swaying at the bottom */}
-        <Algae count={10} />
+        <Algae count={Math.min(22, 6 + Math.floor(waterQuality.nitrates / 5))} />
+
+        {/* Effet profondeur aquatique : teinte bleue progressive vers le bas + désaturation */}
+        <div className="absolute inset-0 pointer-events-none z-[2]" style={{
+          background: "linear-gradient(to bottom, transparent 0%, transparent 35%, rgba(10,30,80,0.08) 65%, rgba(5,15,60,0.22) 100%)",
+        }} />
+        {/* 🌋 Perte de saturation en profondeur — grisâtre sur 40% bas du tank */}
+        <div className="absolute left-0 right-0 bottom-0 pointer-events-none z-[2]" style={{ height: '40%' }}>
+          <div style={{
+            height: '100%',
+            background: 'linear-gradient(to bottom, transparent 0%, rgba(38,38,55,0.07) 55%, rgba(18,18,32,0.16) 100%)',
+            mixBlendMode: 'multiply',
+          }} />
+        </div>
+        {/* Eau légèrement verdâtre si nitrates hauts (déséquilibre écosystème) */}
+        {waterQuality.nitrates > 30 && (
+          <div className="absolute inset-0 pointer-events-none z-[2]" style={{
+            background: `rgba(30,120,40,${Math.min(0.12, (waterQuality.nitrates - 30) * 0.004)})`,
+            mixBlendMode: "multiply",
+          }} />
+        )}
+
+        {/* 🌡 Micro-zones thermiques dynamiques — gradient chaud si >26°C, froid si <22°C */}
+        {dynamicTemp > 26 && (
+          <div className="absolute left-0 right-0 pointer-events-none z-[1]" style={{ top: 0, height: '28%' }}>
+            <div style={{ height: '100%', background: 'linear-gradient(to bottom, rgba(255,90,10,0.055) 0%, transparent 100%)' }} />
+          </div>
+        )}
+        {dynamicTemp < 22 && (
+          <div className="absolute left-0 right-0 pointer-events-none z-[1]" style={{ bottom: 0, height: '28%' }}>
+            <div style={{ height: '100%', background: 'linear-gradient(to top, rgba(40,100,255,0.06) 0%, transparent 100%)' }} />
+          </div>
+        )}
+
+        {/* 🌡 Micro-zones thermiques — thermocline band + heat shimmer */}
+        <div className="absolute left-0 right-0 pointer-events-none z-[2]" style={{ top: "40%", height: "6%" }}>
+          <motion.div className="w-full h-full"
+            style={{ background: "linear-gradient(to bottom, transparent 0%, rgba(255,180,40,0.04) 50%, transparent 100%)" }}
+            animate={{ scaleX: [1, 1.03, 0.98, 1], opacity: [0.4, 0.8, 0.5, 0.8, 0.4] }}
+            transition={{ duration: 7, repeat: Infinity, ease: "easeInOut" }}
+          />
+        </div>
+
+        {/* 🖱 Courant local par glisser — traînée de bulles/ondulations */}
+        {dragTrail.map((pt, idx) => (
+          <motion.div key={`drag-${pt.id}`} className="absolute rounded-full pointer-events-none z-[3]"
+            style={{ left: `${pt.x}%`, top: `${pt.y}%`, translateX: "-50%", translateY: "-50%",
+              width: `${12 - idx * 0.5}px`, height: `${12 - idx * 0.5}px`,
+              border: "1.5px solid rgba(180,230,255,0.6)", background: "rgba(180,230,255,0.08)" }}
+            initial={{ opacity: 0.7, scale: 0.6 }}
+            animate={{ opacity: 0, scale: 2.5 }}
+            transition={{ duration: 1.0, ease: "easeOut" }}
+          />
+        ))}
+
+        {/* 💦 Maintien du doigt — onde pulsante */}
+        <AnimatePresence>
+          {holdWaves.map(w => (
+            <motion.div key={`hold-${w.id}`} className="absolute pointer-events-none z-[4]"
+              style={{ left: `${w.x}%`, top: `${w.y}%`, translateX: "-50%", translateY: "-50%" }}>
+              {[0, 1, 2].map(k => (
+                <motion.div key={k} className="absolute rounded-full border-2 border-cyan-300/60"
+                  style={{ width: 20, height: 20, top: "50%", left: "50%", translateX: "-50%", translateY: "-50%" }}
+                  initial={{ scale: 0.5, opacity: 0.8 }}
+                  animate={{ scale: [0.5, 3 + k], opacity: [0.8, 0] }}
+                  transition={{ duration: 1.4, delay: k * 0.35, ease: "easeOut" }}
+                />
+              ))}
+            </motion.div>
+          ))}
+        </AnimatePresence>
+
+        {/* 🌊 Indicateur de courant visible — flèche directionnelle + particules dérivantes */}
+        {currentStrength > 0.2 && !feedingActive && (
+          <div className="absolute inset-0 pointer-events-none z-[2]">
+            {/* Flèche de direction */}
+            <motion.div
+              className="absolute select-none"
+              style={{
+                top: '50%',
+                left: currentAngle === 0 ? '6%' : '89%',
+                transform: `translateY(-50%) rotate(${currentAngle === 0 ? 0 : 180}deg)`,
+                fontSize: '16px',
+                color: 'rgba(160,220,255,0.6)',
+                filter: 'blur(0.4px)',
+              }}
+              animate={{
+                opacity: [currentStrength * 0.18, currentStrength * 0.42, currentStrength * 0.18],
+                x: currentAngle === 0 ? [0, 6, 0] : [0, -6, 0],
+              }}
+              transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
+            >➞</motion.div>
+            {/* Micro-particules qui dérivent avec le courant */}
+            {[0, 1, 2, 3, 4].map(k => (
+              <motion.div
+                key={`curr-${k}`}
+                className="absolute rounded-full pointer-events-none"
+                style={{
+                  width: 3, height: 2,
+                  background: `rgba(140,210,255,${0.18 + k * 0.05})`,
+                  top: `${12 + k * 15}%`,
+                  left: currentAngle === 0 ? `${2 + k * 1.5}%` : undefined,
+                  right: currentAngle !== 0 ? `${2 + k * 1.5}%` : undefined,
+                }}
+                animate={{
+                  x: currentAngle === 0
+                    ? [0, Math.round(currentStrength * 820)]
+                    : [0, -Math.round(currentStrength * 820)],
+                  opacity: [0, 0.65, 0.5, 0],
+                }}
+                transition={{
+                  duration: 5.5 + k * 1.2,
+                  repeat: Infinity,
+                  delay: k * 0.95,
+                  ease: 'linear',
+                }}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* ⚡ Tempête lumineuse — inondation cyan quand lightStormActive */}
+        <AnimatePresence>
+          {lightStormActive && (
+            <motion.div className="absolute inset-0 pointer-events-none z-[5]"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: [0, 0.18, 0.12, 0.22, 0.1] }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 3, repeat: 3, ease: "easeInOut" }}
+              style={{ background: "radial-gradient(ellipse at 50% 40%, rgba(0,255,200,0.35) 0%, rgba(0,150,255,0.15) 50%, transparent 80%)", mixBlendMode: "screen" }}
+            />
+          )}
+        </AnimatePresence>
+
+        {/* 🪟 Reflet du joueur — vitre avec reflets selon luminosité */}
+        {(!isDayTime || sunlightIntensity < 0.35) && (
+          <div className="absolute top-0 left-0 right-0 pointer-events-none z-[3]" style={{ height: '4%' }}>
+            <motion.div className="w-full h-full"
+              style={{ background: "linear-gradient(to bottom, rgba(120,190,255,0.09) 0%, transparent 100%)" }}
+              animate={{ opacity: [0.4, 0.75, 0.4] }}
+              transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+            />
+          </div>
+        )}
+        {/* Reflets verticaux sur la vitre en nuit profonde */}
+        {deepNightMode && (
+          <>
+            {[0.12, 0.38, 0.64, 0.86].map((xFrac, k) => (
+              <motion.div key={`refl-${k}`} className="absolute top-0 pointer-events-none z-[3]"
+                style={{
+                  left: `${xFrac * 100}%`,
+                  width: '1px',
+                  height: `${7 + k * 4}%`,
+                  background: 'linear-gradient(to bottom, rgba(160,215,255,0.18) 0%, transparent 100%)',
+                  transform: 'translateX(-50%)',
+                }}
+                animate={{ opacity: [0.25, 0.65, 0.25], scaleY: [0.85, 1.1, 0.9, 1.0] }}
+                transition={{ duration: 4.5 + k * 1.3, repeat: Infinity, ease: 'easeInOut', delay: k * 0.9 }}
+              />
+            ))}
+          </>
+        )}
+
+        {/* 🔬 Flash bioluminescent synchronisé — pulsation collective entre poissons luminescents */}
+        {bioFlashActive && bioFishCount >= 2 && (
+          <motion.div className="absolute inset-0 pointer-events-none z-[3]"
+            initial={{ opacity: 0 }} animate={{ opacity: [0, 0.12, 0] }}
+            transition={{ duration: 0.9, ease: "easeOut" }}
+            style={{ background: "radial-gradient(ellipse at 50% 50%, rgba(0,255,220,0.2) 0%, transparent 70%)", mixBlendMode: "screen" }}
+          />
+        )}
+
+        {/* 🐠 Ballet bioluminescent collectif — 3+ poissons pulsent en phase */}
+        {bioCollectivePulse > 0 && bioFishCount >= 3 && isNightMode && (
+          <motion.div
+            key={`sync-${bioCollectivePulse}`}
+            className="absolute inset-0 pointer-events-none z-[3]"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: [0, 0.08, 0.03, 0.08, 0] }}
+            transition={{ duration: 2.5, ease: "easeInOut" }}
+            style={{
+              background: "radial-gradient(ellipse at 50% 50%, hsla(185,100%,65%,0.35) 0%, hsla(210,100%,55%,0.1) 50%, transparent 75%)",
+              mixBlendMode: "screen",
+            }}
+          />
+        )}
+
+        {/* 🌑 Migration nocturne — halo de lumière qui traverse le tank lentement */}
+        {nocturnalMigrationActive && isNightMode && (
+          <motion.div
+            className="absolute inset-y-0 pointer-events-none z-[4]"
+            style={{ width: "35%" }}
+            initial={{ x: nocturnalMigrationDir > 0 ? "-35%" : "100%" }}
+            animate={{ x: nocturnalMigrationDir > 0 ? "100%" : "-35%" }}
+            transition={{ duration: 18, ease: "linear" }}
+          >
+            {[...Array(Math.min(bioFishCount, 5))].map((_, k) => (
+              <motion.div key={`mig-${k}`} className="absolute rounded-full pointer-events-none"
+                style={{
+                  width: 20 + k * 8, height: 20 + k * 8,
+                  top: `${18 + k * 12}%`,
+                  left: `${5 + k * 18}%`,
+                  background: `radial-gradient(circle, hsla(${185 + k * 22},100%,70%,0.65) 0%, transparent 70%)`,
+                  filter: "blur(5px)",
+                  mixBlendMode: "screen",
+                }}
+                animate={{ opacity: [0.4, 0.95, 0.5, 0.9, 0.4], scale: [0.85, 1.2, 0.9, 1.15, 0.85] }}
+                transition={{ duration: 2.5, repeat: Infinity, delay: k * 0.5, ease: "easeInOut" }}
+              />
+            ))}
+            {/* Traînée de particules derrière le groupe */}
+            {[...Array(8)].map((_, k) => (
+              <motion.div key={`mig-trail-${k}`} className="absolute rounded-full pointer-events-none"
+                style={{
+                  width: 3 + (k % 3), height: 3 + (k % 3),
+                  top: `${10 + (k * 9.7) % 75}%`,
+                  right: nocturnalMigrationDir > 0 ? `${5 + k * 8}%` : undefined,
+                  left: nocturnalMigrationDir < 0 ? `${5 + k * 8}%` : undefined,
+                  background: `hsla(${185 + k * 15},90%,75%,0.6)`,
+                  filter: "blur(1px)",
+                  mixBlendMode: "screen",
+                }}
+                animate={{ opacity: [0, 0.7, 0] }}
+                transition={{ duration: 0.8, repeat: Infinity, delay: k * 0.15 }}
+              />
+            ))}
+          </motion.div>
+        )}
+
+        {/* � Biome Abyssal — fond noir total + espèces 100% luminescentes + particules abyssales */}
+        {isAbyssalBiome && (
+          <motion.div className="absolute inset-0 pointer-events-none z-[6]"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 4 }}>
+            {/* Fond noir abyssal quasi-total */}
+            <div className="absolute inset-0" style={{ background: "rgba(0,0,8,0.88)" }} />
+            {/* Vignetage ultra profond */}
+            <div className="absolute inset-0" style={{ background: "radial-gradient(ellipse at 50% 50%, transparent 20%, rgba(0,0,5,0.82) 100%)" }} />
+            {/* Halos ambiants — colonnes de lumière abyssale lointaine */}
+            {[0, 1, 2].map(k => (
+              <motion.div key={`ab-col-${k}`} className="absolute pointer-events-none"
+                style={{
+                  top: 0, width: `${12 + k * 6}px`, height: "90%",
+                  left: `${18 + k * 30}%`,
+                  background: `linear-gradient(to bottom, hsla(${185 + k * 20},100%,65%,0.06) 0%, transparent 80%)`,
+                  filter: "blur(12px)",
+                  mixBlendMode: "screen",
+                }}
+                animate={{ opacity: [0.35, 0.8, 0.4, 0.7, 0.35], scaleX: [0.8, 1.3, 0.9, 1.2, 0.8] }}
+                transition={{ duration: 9 + k * 2.5, repeat: Infinity, ease: "easeInOut", delay: k * 1.8 }}
+              />
+            ))}
+            {/* Particules abyssales — mélange de micro-lumières et de spores */}
+            {[...Array(50)].map((_, k) => {
+              const hue = [185, 210, 250, 175, 230][k % 5];
+              const sz = 1 + (k % 4 < 2 ? 0.5 : 1.5);
+              return (
+                <motion.div key={`ab-${k}`} className="absolute rounded-full pointer-events-none"
+                  style={{
+                    width: sz, height: sz,
+                    top: `${3 + (k * 1.97) % 92}%`,
+                    left: `${(k * 2.13) % 97}%`,
+                    background: `hsla(${hue},95%,75%,1)`,
+                    filter: "blur(0.3px)",
+                    mixBlendMode: "screen",
+                  }}
+                  animate={{ opacity: [0, 1, 0.4, 1, 0], scale: [0.4, 1.6, 0.7, 1.5, 0.4] }}
+                  transition={{ duration: 2 + (k % 5) * 0.6, repeat: Infinity, delay: (k * 0.11) % 4.5, ease: "easeInOut" }}
+                />
+              );
+            })}
+            {/* Vague lente au sol */}
+            <motion.div className="absolute bottom-0 left-0 right-0 pointer-events-none"
+              style={{ height: "22%", background: "linear-gradient(to top, hsla(185,100%,60%,0.04) 0%, transparent 100%)", mixBlendMode: "screen" }}
+              animate={{ opacity: [0.4, 1, 0.5, 0.9, 0.4] }}
+              transition={{ duration: 7, repeat: Infinity, ease: "easeInOut" }}
+            />
+          </motion.div>
+        )}
+
+        {/* �🌑 Biome Mystique — fond sombre + particules cosmiques */}
+        {isMysticBiome && (
+          <motion.div className="absolute inset-0 pointer-events-none z-[4]"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 3 }}>
+            {/* Couche profonde sombre */}
+            <div className="absolute inset-0" style={{ background: "rgba(0,2,25,0.55)" }} />
+            {/* Vignetage cosmique */}
+            <div className="absolute inset-0" style={{ background: "radial-gradient(ellipse at 50% 50%, transparent 30%, rgba(5,0,30,0.7) 100%)" }} />
+            {/* Particules cosmiques */}
+            {[...Array(30)].map((_, k) => (
+              <motion.div key={`cosmic-${k}`} className="absolute rounded-full pointer-events-none"
+                style={{ width: `${1 + (k % 3)}px`, height: `${1 + (k % 3)}px`,
+                  top: `${5 + (k * 3.1) % 88}%`, left: `${(k * 3.3) % 95}%`,
+                  background: k % 4 === 0 ? "#a78bfa" : k % 4 === 1 ? "#67e8f9" : k % 4 === 2 ? "#f9a8d4" : "white",
+                  filter: "blur(0.3px)" }}
+                animate={{ opacity: [0, 1, 0], scale: [0.5, 1.8, 0.5] }}
+                transition={{ duration: 1.5 + (k % 4) * 0.7, repeat: Infinity, delay: (k * 0.13) % 4, ease: "easeInOut" }}
+              />
+            ))}
+            {/* Halo violet autour du centre */}
+            <motion.div className="absolute pointer-events-none"
+              style={{ top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+                width: 200, height: 200, borderRadius: "50%",
+                background: "radial-gradient(circle, rgba(139,92,246,0.15) 0%, transparent 70%)",
+                filter: "blur(12px)" }}
+              animate={{ scale: [1, 1.3, 1], opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
+            />
+          </motion.div>
+        )}
 
         {/* Fond marin modulable - floor texture overlay */}
         <div
@@ -1427,7 +3428,24 @@ export default function Aquarium() {
           ))}
         </div>
 
-        {/* Thermocline - visible temperature layer at mid-tank depth */}
+        {/* 💙 Caustiques bioluminescentes — teinte cyan sur le fond quand bio poissons actifs la nuit */}
+        {bioFishCount >= 1 && isNightMode && (
+          <div className="absolute bottom-0 left-0 right-0 h-2/5 pointer-events-none z-[5] overflow-hidden">
+            {[0, 1, 2, 3].map(i => (
+              <motion.div key={`bio-caustic-${i}`} className="absolute rounded-full"
+                style={{
+                  width: `${45 + i * 28}px`, height: `${30 + i * 12}px`,
+                  left: `${8 + i * 22}%`, top: `${5 + (i % 3) * 22}%`,
+                  background: `radial-gradient(ellipse, hsla(185,100%,65%,${0.12 * bioIntensity}) 0%, transparent 70%)`,
+                  filter: "blur(5px)",
+                  mixBlendMode: "screen",
+                }}
+                animate={{ scaleX: [1, 1.7, 0.65, 1.4, 1], scaleY: [1, 0.55, 1.5, 0.8, 1], opacity: [0.3, 0.85, 0.4, 0.75, 0.3] }}
+                transition={{ duration: 4 + i * 0.8, delay: i * 0.7, repeat: Infinity, ease: "easeInOut" }}
+              />
+            ))}
+          </div>
+        )}
         <motion.div
           className="absolute left-0 right-0 pointer-events-none z-[5]"
           style={{ top: '50%', height: '3px' }}
@@ -1449,14 +3467,20 @@ export default function Aquarium() {
         {/* Shrimp prey system for carnivorous fish */}
         <ShrimpPrey 
           carnivorePositions={carnivorePositions}
+          nitrateLevel={waterQuality.nitrates}
           onShrimpCaught={() => {
-            // Optional: add points or feedback when fish catches shrimp
+            // Shrimps eat waste, reducing nitrates in the food chain
+            setWaterQuality(prev => ({
+              ...prev,
+              nitrates: Math.max(0, prev.nitrates - 0.5),
+            }));
           }}
         />
 
         {/* Fish Games System */}
         <FishGames 
           fishCount={fishInTank.length}
+          fishData={fishInTank.length > 0 ? fishInTank : FISH_CATALOG.slice(0, 8)}
           fishPositions={fishPositions}
         />
 
@@ -1513,22 +3537,30 @@ export default function Aquarium() {
           // Health affects behavior
           const healthSpeedMod = isCriticalHealth ? 2.0 : isLowHealth ? 1.5 : 1.0;
           
-          // Curious fish follow mouse
+          // Curious fish follow mouse (up to 3 at a time, only when mouse is slow)
           const isCurious = style.personality.curiosity > 0.6;
-          const followMouse = isCurious && mousePosition && !feedingActive && !isCriticalHealth;
+          const priorCuriousCount = isCurious
+            ? fishInTank.slice(0, i).filter((_, k) => (fishPersonalities[k]?.curiosity ?? 0) > 0.6).length
+            : 3;
+          const followMouse = isCurious && priorCuriousCount < 3 && mousePosition && !feedingActive && !isCriticalHealth && mouseSpeedRef.current < 50;
           // Mouse follow: convert % position to px (estimate swim area 350x580)
           const swimW = 350, swimH = 580;
           const mouseTargetX = followMouse ? (mousePosition.x / 100) * swimW : 0;
           const mouseTargetY = followMouse ? ((mousePosition.y - style.startYNum) / 100) * swimH * 0.7 : 0;
-          // fish spread across tank; target food in px relative to start
-          // During feeding, fish dart horizontally & vertically to where food lands
-          const swimAreaWidth = 350; // safe mobile estimate
+          // Fish actively swim toward falling food positions
+          // Food spreads 5–90% horizontally (same formula as FoodParticles.tsx)
+          const swimAreaWidth = 350;
           const swimAreaHeight = 580;
-          const foodPx = (12 + (i * 14) % 68) / 100 * swimAreaWidth;
-          const foodYPct = 38 + (i % 5) * 8; // 38-70% from top
-          const foodYPx = (foodYPct / 100) * swimAreaHeight - (style.startYNum / 100) * swimAreaHeight;
-          const feedingTargetX = feedingActive ? foodPx : 0;
-          const feedingTargetY = feedingActive ? foodYPx : 0;
+          const startXPct = parseFloat(style.startX);                          // e.g. 45 (from "45%")
+          const foodXPct = 5 + ((i * 5.3 + Math.sin(i * 2.1) * 14) % 85);    // 5–90%, mirrors food spread
+          const feedingTargetX = feedingActive
+            ? ((foodXPct - startXPct) / 100) * swimAreaWidth                  // relative px offset from startX
+            : 0;
+          // Fish swim UP to intercept food mid-fall (25–40% from top of tank)
+          const foodInterceptYPct = 25 + (i % 5) * 3;                         // 25–37%
+          const feedingTargetY = feedingActive
+            ? ((foodInterceptYPct - style.startYNum) / 100) * swimAreaHeight  // negative = move up
+            : 0;
           
           // Get saved position after feeding (if exists)
           const savedPos = fishFedPositions[fishKey];
@@ -1537,6 +3569,22 @@ export default function Aquarium() {
           // Fish aging: older fish are slightly larger
           const fishInstance = fishInstances.find((fi) => fi.fishId === fish.id);
           const ageScale = fishInstance ? Math.min(1 + (fishInstance.age - 7) * 0.0015, 1.3) : 1.0;
+
+          // 👶 Bébé suit parent — jeune poisson (<14j) avec dominanceBias OU timidityBias suit le plus proche
+          const isBaby = (fishInstance?.age ?? 30) < 14 && (
+            fishInstance?.hiddenTraits?.dominanceBias !== undefined ||
+            fishInstance?.hiddenTraits?.timidityBias !== undefined
+          );
+          const parentIndex = isBaby
+            ? fishInTank.findIndex((_, k) => k !== i && (fishInstances.find(fi => fi.fishId === fishInTank[k]!.id)?.age ?? 0) > 14)
+            : -1;
+          const parentStyle = parentIndex >= 0 ? (fishStyles[parentIndex] ?? null) : null;
+          const parentFollowX = (isBaby && parentStyle && !feedingActive && !followMouse)
+            ? parseFloat(parentStyle.startX) * 3.5 - parseFloat(style.startX) * 3.5
+            : 0;
+          const parentFollowY = (isBaby && parentStyle && !feedingActive && !followMouse)
+            ? (parentStyle.startYNum - style.startYNum) * 3.5
+            : 0;
           
           // Face direction: 1=right -1=left (ref-based, render only sets initial value)
           const faceDir = followMouse
@@ -1544,9 +3592,57 @@ export default function Aquarium() {
             : feedingActive
             ? (feedingTargetX > 0 ? 1 : feedingTargetX < 0 ? -1 : (fishDirections.current[i] ?? 1))
             : (fishDirections.current[i] ?? style.scaleX);
+
+          // 🌡 Thermal migration nudge: warm-water fish surface when hot, cold-water fish sink when cold
+          const fishTempStr = fish?.temperature ?? "";
+          const isWarmFish = /2[4-9]|30/.test(fishTempStr);
+          const isColdFish = /1[6-9]|2[0-1]/.test(fishTempStr);
+          const thermalNudge = (!feedingActive && !followMouse)
+            ? (isWarmFish && dynamicTemp > 26 ? -14 :
+               isWarmFish && dynamicTemp < 22 ?  12 :
+               isColdFish && dynamicTemp < 22 ? -12 :
+               isColdFish && dynamicTemp > 26 ?  14 : 0)
+            : 0;
+
+          // 🐟 Intelligence collective: schooling formation adapts near predators
+          const isSchoolingFish = fish?.behavior === "schooling";
+          const schoolCount = fishInTank.filter(f => f?.behavior === "schooling").length;
+          const defensiveCircle = isSchoolingFish && predatorNearSchool && schoolCount >= 4;
+          const schoolFormScale = predatorNearSchool ? 0.4 : tankMood === "calm" ? 1.22 : 1.0;
+
+          let effectiveMovX = style.movementX;
+          let effectiveMovY = style.movementY.map(y => y + thermalNudge);
+          if (isSchoolingFish && !feedingActive && !followMouse && !isBaby) {
+            if (defensiveCircle) {
+              const angle = (2 * Math.PI * (i % 6)) / Math.min(6, schoolCount);
+              const cr = 50;
+              const cx = Math.round(Math.cos(angle) * cr);
+              const cy = Math.round(Math.sin(angle) * cr * 0.55);
+              effectiveMovX = [cx, cx+5, cx-5, cx+3, cx-3, cx+2, cx-2, cx];
+              effectiveMovY = [cy, cy-6, cy+6, cy-4, cy+4, cy-2, cy+3, cy];
+            } else {
+              effectiveMovX = style.movementX.map(x => Math.round(x * schoolFormScale));
+              effectiveMovY = style.movementY.map(y => Math.round(y * schoolFormScale + thermalNudge));
+            }
+          }
+
+          // 👁️ Regard dynamique: subtle eye shift toward food > cursor > dominant
+          let gazeX = 0; // 1=toward head/forward, -1=backward, 0=neutral
+          if (feedingActive && feedingTargetX !== 0) {
+            gazeX = feedingTargetX > 20 ? 1 : feedingTargetX < -20 ? -1 : 0;
+          } else if (mousePosition && !followMouse) {
+            const relMx = mousePosition.x - parseFloat(style.startX);
+            gazeX = relMx > 8 ? 1 : relMx < -8 ? -1 : 0;
+          } else {
+            const domIdx = fishPersonalities.findIndex((p, k) => k !== i && p.dominance > 0.75);
+            if (domIdx >= 0 && fishStyles[domIdx]) {
+              const dx = parseFloat(fishStyles[domIdx].startX) - parseFloat(style.startX);
+              gazeX = dx > 5 ? 1 : dx < -5 ? -1 : 0;
+            }
+          }
           
           return (
-            <div key={fishKey} className="absolute" style={{ left: style.startX, top: style.startY, transform: `scale(${ageScale})`, transformOrigin: 'center bottom' }}>
+            <div key={fishKey} className="absolute" style={{ left: style.startX, top: style.startY, transform: `scale(${ageScale})`, transformOrigin: 'center bottom', filter: style.depthFilter }}>
               {/* Fish wake trail - mirror to match direction */}
               {(fish.swimSpeed === "fast" || fish.swimSpeed === "normal") && !isNightMode && (
                 <div style={{ transform: `scaleX(${faceDir})`, position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
@@ -1566,24 +3662,46 @@ export default function Aquarium() {
                   ))}
                 </div>
               )}
+
+              {/* Traînée lumineuse nocturne — poissons rapides la nuit */}
+              {fish.swimSpeed === "fast" && isNightMode && (
+                <div style={{ transform: `scaleX(${faceDir})`, position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none', mixBlendMode: 'screen' }}>
+                  {[...Array(5)].map((_, idx) => (
+                    <motion.div key={`lum-trail-${idx}`} className="absolute rounded-full pointer-events-none"
+                      style={{
+                        width: `${8 - idx * 1.2}px`, height: `${8 - idx * 1.2}px`,
+                        background: `radial-gradient(circle, hsla(185,100%,75%,0.9) 0%, transparent 70%)`,
+                        left: `${-8 - idx * 10}px`, top: '50%', transform: 'translateY(-50%)',
+                        filter: `blur(${1 + idx * 0.5}px)`,
+                      }}
+                      animate={{ opacity: [0, 0.7 - idx * 0.12, 0], scale: [0.6, 1, 1.4] }}
+                      transition={{ duration: 0.6 + idx * 0.1, delay: idx * 0.08, repeat: Infinity, ease: 'easeOut' }}
+                    />
+                  ))}
+                </div>
+              )}
               
               {/* Fish body - smooth x/y movement, direction via scaleX state */}
               <motion.div
                 className={`${style.size} cursor-pointer relative z-10`}
-                initial={{ x: 0, y: 0, rotateZ: 0, scale: 1 }}
+                initial={{ x: 0, y: 0, rotateZ: 0, scale: 1, scaleX: style.movementScaleX[0] ?? 1 }}
                 animate={{
                   x: followMouse
                       ? mouseTargetX
-                      : feedingActive
-                        ? feedingTargetX
-                        : style.movementX,
+                      : isBaby && parentFollowX !== 0
+                        ? parentFollowX + 18
+                        : feedingActive
+                          ? feedingTargetX
+                          : effectiveMovX,
                   y: followMouse
                       ? mouseTargetY
-                      : feedingActive
-                        ? feedingTargetY
-                        : isCriticalHealth
-                          ? style.movementY.map(y => y + 25)
-                          : style.movementY,
+                      : isBaby && parentFollowY !== 0
+                        ? parentFollowY + 10
+                        : feedingActive
+                          ? feedingTargetY
+                          : isCriticalHealth
+                            ? effectiveMovY.map(y => y + 25)
+                            : effectiveMovY,
                   rotateZ: isClicked
                     ? CLICK_ROTATE_Z
                     : isCriticalHealth
@@ -1592,17 +3710,22 @@ export default function Aquarium() {
                         ? FEED_ROTATE_Z
                         : SWIM_ROTATE_Z,
                   scale: isClicked ? CLICK_SCALE : 1,
+                  scaleX: followMouse
+                    ? (mouseTargetX >= 0 ? 1 : -1)
+                    : feedingActive
+                      ? (feedingTargetX >= 0 ? 1 : -1)
+                      : style.movementScaleX,
                 }}
                 transition={{
                   x: followMouse
                       ? { duration: 0.8, ease: "easeOut" }
                       : feedingActive
-                        ? { duration: 0.7 + i * 0.1, ease: [0.2, 0, 0.4, 1] }
+                        ? { duration: 0.4 + i * 0.04, ease: [0.1, 0, 0.3, 1] }
                         : { duration: style.duration * healthSpeedMod, repeat: Infinity, ease: "easeInOut", delay: style.delay },
                   y: followMouse
                       ? { duration: 0.8, ease: "easeOut" }
                       : feedingActive
-                        ? { duration: 0.7 + i * 0.1, ease: [0.2, 0, 0.4, 1] }
+                        ? { duration: 0.4 + i * 0.04, ease: [0.1, 0, 0.3, 1] }
                         : { duration: style.duration * healthSpeedMod, repeat: Infinity, ease: "easeInOut", delay: style.delay },
                   rotateZ: isClicked
                     ? { duration: 0.6, ease: "easeOut" }
@@ -1612,6 +3735,9 @@ export default function Aquarium() {
                         ? { duration: 0.4, repeat: 4, ease: "easeInOut", delay: 1.5 + i * 0.15 }
                         : { duration: style.duration / 2, repeat: Infinity, ease: "easeInOut" },
                   scale: isClicked ? { duration: 0.6, ease: "backOut" } : { duration: 1 },
+                  scaleX: followMouse || feedingActive
+                    ? { duration: 0.18, ease: "easeOut" }
+                    : { duration: style.duration * healthSpeedMod, repeat: Infinity, ease: "easeInOut", delay: style.delay },
                 }}
                 onAnimationComplete={() => {
                   // Save position when feeding animation completes
@@ -1628,8 +3754,323 @@ export default function Aquarium() {
                 }}
                 whileHover={{ scale: 1.1 }}
               >
-                {/* Direction wrapper - set initial from render, then interval updates DOM directly (zero re-renders) */}
-                <div ref={(el) => { fishDirEls.current[i] = el; }} style={{ transform: `scaleX(${faceDir})`, width: '100%', height: '100%' }}>
+                {/* Direction wrapper */}
+                <div style={{ width: '100%', height: '100%' }}>
+                  {/* 👁️ Regard dynamique — pupille orientée vers nourriture / curseur / dominant */}
+                  <div className="absolute pointer-events-none z-[12]"
+                    style={{
+                      width: 4, height: 4, borderRadius: '50%',
+                      background: 'rgba(10,10,20,0.75)',
+                      top: '33%',
+                      left: faceDir > 0 ? `${62 + gazeX * 5}%` : `${30 - gazeX * 5}%`,
+                      transition: 'left 0.35s ease',
+                      boxShadow: '0 0 0 1.5px rgba(255,255,255,0.3)',
+                    }}
+                  />
+                  {/* Bioluminescent genetic glow — driven by bioIntensity world scalar */}
+                  {(() => {
+                    const bio = fishInstance?.hiddenTraits?.bioluminescent;
+                    if (!bio || bio === "none") return null;
+                    const intensityByType = { soft: 0.35, reactive: 0.55, intense: 0.85 };
+                    // ageBoost: jeunes poissons (<30j) brillent plus fort
+                    const ageBoost = 1 + Math.max(0, 30 - (fishInstance?.age ?? 30)) / 30 * 0.6;
+                    // stormBoost: tempête lumineuse ×3
+                    const stormBoost = lightStormActive ? 3 : 1;
+                    // Global bioIntensity replaces per-fish night/moon/mood factors
+                    const opacity = Math.min(1, (intensityByType[bio] ?? 0) * bioIntensity * ageBoost * stormBoost);
+                    const radius = (bio === "intense" ? 28 : bio === "reactive" ? 20 : 14) * (deepNightMode ? 1.3 : 1) * (lightStormActive ? 1.5 : 1);
+                    // ── Bioluminescence émotionnelle + synchronisation collective ────────
+                    const highCurrent = currentStrength > 0.55;
+                    const isStressedFish = style.personality.stressed;
+                    const isExcitedFish = !isStressedFish && style.personality.energy > 0.75;
+                    const isCalmFish = !isStressedFish && style.personality.energy < 0.4;
+                    // Collective sync: 3+ bio fish all share the same period → visual ballet
+                    const isCollectiveSync = bioFishCount >= 3 && isNightMode;
+                    //  Duration per emotional state
+                    const emoPulseDur = isStressedFish ? 0.65
+                      : isExcitedFish ? 0.9
+                      : isCalmFish ? 3.8
+                      : isCollectiveSync ? 2.5
+                      : (bio === "intense" ? 1.5 : 2.5);
+                    const pulseScale: number[] = isCriticalHealth
+                      ? [1, 2, 0.9, 1.8, 1]
+                      : isStressedFish ? [0.85, 1.55, 0.75, 1.6, 0.8, 1.4, 0.85] // chaotique
+                      : isExcitedFish  ? [1, 1.65, 1, 1.65, 1]                    // rapide
+                      : isCalmFish     ? [1, 1.06, 1]                              // très régulier
+                      : style.personality.energy > 0.7 ? [1, 1.6, 1, 1.6, 1]
+                      : bio === "reactive" ? [1, 1.5, 1] : [1, 1.1, 1];
+                    const pulseOpacities = isStressedFish
+                      ? [opacity*0.3, opacity*1.1, opacity*0.5, opacity*0.85, opacity*0.25, opacity*0.95, opacity*0.4]
+                      : isExcitedFish
+                        ? [opacity*0.55, opacity*1.05, opacity*0.6, opacity*1.05, opacity*0.55]
+                        : highCurrent
+                          ? [opacity*0.5, opacity, opacity*0.65, opacity*1.05, opacity*0.7, opacity]
+                          : [opacity*0.6, opacity, opacity*0.7, opacity];
+                    return (
+                      <>
+                        {/* 🌟 BLOOM LAYER 1 — noyau brillant, source du glow */}
+                        <motion.div className="absolute rounded-full pointer-events-none"
+                          animate={{ opacity: pulseOpacities, scale: pulseScale }}
+                          transition={{ duration: emoPulseDur, repeat: Infinity, ease: isStressedFish ? "linear" : "easeInOut" }}
+                          style={{
+                            background: `radial-gradient(circle, hsla(185,100%,80%,1) 0%, hsla(195,100%,65%,0.8) 30%, transparent 70%)`,
+                            filter: "blur(2px)",
+                            top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+                            width: radius * 1.8, height: radius * 1.8,
+                            mixBlendMode: "screen", zIndex: -1,
+                          }}
+                        />
+                        {/* 🌟 BLOOM LAYER 2 — halo médian, additive blend */}
+                        <motion.div className="absolute rounded-full pointer-events-none"
+                          animate={{
+                            opacity: pulseOpacities.map(v => v * 0.55),
+                            scale: pulseScale.map(v => v * 1.2),
+                          }}
+                          transition={{ duration: emoPulseDur, repeat: Infinity, ease: isStressedFish ? "linear" : "easeInOut" }}
+                          style={{
+                            background: `radial-gradient(circle, hsla(185,100%,65%,0.85) 0%, hsla(200,100%,55%,0.4) 45%, transparent 80%)`,
+                            filter: "blur(7px)",
+                            top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+                            width: radius * 3.2, height: radius * 3.2,
+                            mixBlendMode: "screen", zIndex: -1,
+                          }}
+                        />
+                        {/* 🌟 BLOOM LAYER 3 — halo extérieur volumétrique, opacité selon bioIntensity + caméra */}
+                        <motion.div className="absolute rounded-full pointer-events-none"
+                          animate={{
+                            opacity: pulseOpacities.map(v => v * 0.28 * bioIntensity),
+                            scale: pulseScale.map(v => v * 1.5 * (cameraFocus?.zoom ?? 1)),
+                            x: [0, 3, -2, 4, 0], y: [0, -2, 4, -1, 0],
+                          }}
+                          transition={{ duration: emoPulseDur * 1.3, repeat: Infinity, ease: "easeInOut" }}
+                          style={{
+                            background: `radial-gradient(circle, hsla(185,90%,60%,0.5) 0%, hsla(210,100%,50%,0.15) 55%, transparent 80%)`,
+                            filter: "blur(16px)",
+                            top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+                            width: radius * 5.5, height: radius * 5.5,
+                            mixBlendMode: "screen", zIndex: -1,
+                          }}
+                        />
+                        {/* 💧 Halo volumétrique — gradient radial lent, très subtil */}
+                        {isNightMode && (
+                          <motion.div className="absolute rounded-full pointer-events-none"
+                            animate={{
+                              opacity: [0.08 * bioIntensity, 0.18 * bioIntensity, 0.08 * bioIntensity],
+                              x: [0, 5, -3, 4, 0], y: [0, -4, 6, -2, 0],
+                              scale: [1, 1.12, 0.95, 1.08, 1],
+                            }}
+                            transition={{ duration: 6 + (fishInstance?.age ?? 0) % 3, repeat: Infinity, ease: "easeInOut" }}
+                            style={{
+                              background: `radial-gradient(circle, hsla(${bio === 'intense' ? 175 : 195},100%,70%,0.4) 0%, hsla(220,90%,55%,0.1) 50%, transparent 80%)`,
+                              filter: "blur(24px)",
+                              top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+                              width: radius * 8, height: radius * 8,
+                              mixBlendMode: "screen", zIndex: -2,
+                            }}
+                          />
+                        )}
+                        {/* 🔬 Flash A — poisson initiateur envoie un ping lumineux */}
+                        {bioFlashActive && isNightMode && (
+                          <motion.div className="absolute rounded-full pointer-events-none"
+                            initial={{ opacity: 0, scale: 0.5 }}
+                            animate={{ opacity: [0, 0.9, 0], scale: [0.6, 2.4, 3.8] }}
+                            transition={{ duration: 0.45, ease: "easeOut" }}
+                            style={{
+                              border: "2px solid rgba(0,255,220,0.95)",
+                              top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+                              width: radius * 3, height: radius * 3,
+                              mixBlendMode: "screen", zIndex: -1,
+                            }}
+                          />
+                        )}
+                        {/* 🔬 Flash B — réponse du second poisson (~700ms plus tard, anneau plus doux) */}
+                        {bioResponseActive && isNightMode && (
+                          <motion.div className="absolute rounded-full pointer-events-none"
+                            initial={{ opacity: 0, scale: 0.4 }}
+                            animate={{ opacity: [0, 0.6, 0], scale: [0.5, 1.8, 2.8] }}
+                            transition={{ duration: 0.4, ease: "easeOut" }}
+                            style={{
+                              border: "1.5px solid rgba(100,255,200,0.7)",
+                              top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+                              width: radius * 2.2, height: radius * 2.2,
+                              mixBlendMode: "screen", zIndex: -1,
+                            }}
+                          />
+                        )}
+                        {/* ✨ Traînée lumineuse — poissons bio rapides laissent des points qui s'estompent */}
+                        {fish.swimSpeed === "fast" && isNightMode && (
+                          <>
+                            {[0, 1, 2].map(t => (
+                              <motion.div key={`trail-${t}`} className="absolute rounded-full pointer-events-none"
+                                style={{
+                                  width: Math.max(1, 4 - t * 1.2),
+                                  height: Math.max(1, 4 - t * 1.2),
+                                  background: `hsla(185,100%,65%,${0.65 - t * 0.18})`,
+                                  top: "50%",
+                                  left: faceDir > 0 ? `-${(t + 1) * 7}px` : `calc(100% + ${(t + 1) * 7}px)`,
+                                  transform: "translateY(-50%)",
+                                  filter: "blur(1.5px)",
+                                  zIndex: -1,
+                                  mixBlendMode: "screen",
+                                }}
+                                animate={{ opacity: [0, opacity * 0.8, 0] }}
+                                transition={{ duration: 0.55, delay: t * 0.08, repeat: Infinity, ease: "easeOut" }}
+                              />
+                            ))}
+                          </>
+                        )}
+                        {/* 👁 Regard dynamique — reflet lumineux directionnel vers cible */}
+                        {bio === "intense" && (
+                          <div className="absolute pointer-events-none"
+                            style={{
+                              width: 5, height: 5, borderRadius: "50%",
+                              background: "rgba(0,255,220,0.9)",
+                              top: "35%",
+                              left: faceDir > 0 ? "70%" : "20%",
+                              filter: "blur(1px)",
+                              zIndex: 3,
+                            }}
+                          />
+                        )}
+                        {/* 💧 Éclairage local du fond — le sol s’illumine là où le poisson passe */}
+                        {(bio === "intense" || bio === "reactive") && isNightMode && (
+                          <motion.div className="absolute pointer-events-none"
+                            style={{
+                              width: radius * (bio === 'intense' ? 5 : 3.5),
+                              height: radius * (bio === 'intense' ? 1.4 : 0.9),
+                              borderRadius: "50%",
+                              background: `radial-gradient(ellipse, hsla(185,100%,65%,${bio === 'intense' ? 0.4 : 0.22}) 0%, hsla(200,90%,55%,0.12) 45%, transparent 75%)`,
+                              filter: "blur(8px)",
+                              bottom: "-110%",
+                              left: "50%",
+                              transform: "translateX(-50%)",
+                              mixBlendMode: "screen",
+                            }}
+                            animate={{ opacity: [0.25 * bioIntensity, 0.6 * bioIntensity, 0.3 * bioIntensity, 0.55 * bioIntensity, 0.25 * bioIntensity] }}
+                            transition={{ duration: emoPulseDur, repeat: Infinity, ease: "easeInOut" }}
+                          />
+                        )}
+                      </>
+                    );
+                  })()}
+                  {/* 👶 Timidity inheritance — shy babies have a light silvery shimmer */}
+                  {isBaby && (fishInstance?.hiddenTraits?.timidityBias ?? 0) > 0.55 && (
+                    <div className="absolute inset-0 rounded-full pointer-events-none" style={{
+                      background: 'radial-gradient(circle, rgba(220,235,255,0.22) 0%, transparent 70%)',
+                      mixBlendMode: 'screen',
+                      zIndex: 5,
+                    }} />
+                  )}
+                  {/* 🌿 Herbivore algae nibble — bottom-dwellers show a tiny chomping indicator near algae */}
+                  {style.personality.preferredDepth === 'bottom'
+                    && waterQuality.nitrates > 15
+                    && !isNightMode
+                    && !feedingActive
+                    && style.startYNum > 55
+                    && (
+                    <motion.div className="absolute text-[9px] pointer-events-none select-none" style={{ bottom: '-14px', left: '50%', transform: 'translateX(-50%)', zIndex: 6 }}
+                      animate={{ opacity: [0, 0.85, 0], y: [0, -4, 0], scale: [0.8, 1.1, 0.8] }}
+                      transition={{ duration: 2.8, repeat: Infinity, delay: i * 1.1 + 0.5, ease: 'easeInOut' }}
+                    >🌿</motion.div>
+                  )}
+                  {(fishInstance?.age ?? 0) > 30 && (
+                    <div className="absolute inset-0 rounded-full pointer-events-none" style={{
+                      background: `radial-gradient(circle, rgba(255,200,50,${Math.min(0.18, ((fishInstance!.age - 30) / 60) * 0.18)}) 0%, transparent 70%)`,
+                      mixBlendMode: "color",
+                      zIndex: 2,
+                    }} />
+                  )}
+                  {/* ✨ Espèce évolutive — aura dorée pour poissons >40j, anneau tournant >70j */}
+                  {(fishInstance?.age ?? 0) >= 40 && (
+                    <motion.div className="absolute inset-0 rounded-full pointer-events-none"
+                      style={{ zIndex: 1 }}
+                      animate={{ boxShadow: [
+                        '0 0 0px 0px rgba(255,200,60,0)',
+                        `0 0 ${10 + Math.min(18, ((fishInstance!.age - 40) / 30) * 12)}px ${4 + Math.min(7, ((fishInstance!.age - 40) / 40) * 6)}px rgba(255,195,50,${0.2 + Math.min(0.18, (fishInstance!.age - 40) / 160)})`,
+                        '0 0 0px 0px rgba(255,200,60,0)',
+                      ]}}
+                      transition={{ duration: 3.5, repeat: Infinity, ease: 'easeInOut' }}
+                    />
+                  )}
+                  {(fishInstance?.age ?? 0) >= 70 && (
+                    <motion.div className="absolute rounded-full pointer-events-none"
+                      style={{ width: '135%', height: '135%', top: '-17.5%', left: '-17.5%', border: '1px solid rgba(255,195,50,0.38)', zIndex: 1 }}
+                      animate={{ rotate: [0, 360], opacity: [0.35, 0.65, 0.35] }}
+                      transition={{ rotate: { duration: 9, repeat: Infinity, ease: 'linear' }, opacity: { duration: 3, repeat: Infinity, ease: 'easeInOut' } }}
+                    />
+                  )}
+                  {/* 🧬 Motif fractal — anneau tournant arc-en-ciel sur poissons mutants */}
+                  {fishInstance?.hiddenTraits?.fractalPattern && (
+                    <motion.div className="absolute rounded-full pointer-events-none"
+                      animate={{ rotate: 360, scale: [1, 1.08, 1] }}
+                      transition={{ rotate: { duration: 4, repeat: Infinity, ease: "linear" }, scale: { duration: 2, repeat: Infinity } }}
+                      style={{
+                        width: 130, height: 130,
+                        top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+                        border: "1.5px solid transparent",
+                        borderRadius: "50%",
+                        background: "transparent",
+                        boxShadow: "0 0 0 1.5px rgba(160,100,255,0.5), 0 0 8px 2px rgba(100,200,255,0.3)",
+                        zIndex: 3,
+                        opacity: 0.7,
+                      }}
+                    />
+                  )}
+                  {/* Hybride secret — double anneau prismatique + éclat central */}
+                  {fishInstance?.hiddenTraits?.secretHybrid && (
+                    <>
+                      <motion.div className="absolute rounded-full pointer-events-none"
+                        animate={{ rotate: -360 }}
+                        transition={{ duration: 6, repeat: Infinity, ease: "linear" }}
+                        style={{
+                          width: 150, height: 150,
+                          top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+                          boxShadow: "0 0 0 2px rgba(255,215,0,0.6), 0 0 12px 4px rgba(255,120,255,0.4)",
+                          borderRadius: "50%", zIndex: 4,
+                        }}
+                      />
+                      <motion.div className="absolute rounded-full pointer-events-none"
+                        animate={{ scale: [1, 1.5, 1], opacity: [0.4, 0.9, 0.4] }}
+                        transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                        style={{
+                          width: 20, height: 20,
+                          top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+                          background: "radial-gradient(circle, rgba(255,255,200,0.9) 0%, rgba(255,180,0,0.4) 60%, transparent 100%)",
+                          filter: "blur(3px)", zIndex: 4,
+                        }}
+                      />
+                    </>
+                  )}
+                  {/* 🫧 Jeu des bulles bébé — bébés dardent vers les bulles et les "éclatent" */}
+                  {isBaby && giantBubbles.length > 0 && giantBubbles.slice(0, 1).map(b => (
+                    <motion.div key={`bpop-${b.id}`} className="absolute pointer-events-none z-[52]"
+                      style={{ top: "50%", left: "50%", translateX: "-50%", translateY: "-50%" }}
+                      initial={{ scale: 1, opacity: 0.9 }}
+                      animate={{ scale: [1, 1.3, 0.8, 1], opacity: [0.9, 1, 0.4, 0] }}
+                      transition={{ duration: 0.7, delay: 0.9, ease: "easeOut" }}>
+                      <span style={{ fontSize: 12 }}>💥</span>
+                    </motion.div>
+                  ))}
+                  {/* ✨ Espèce évoluée — poissons > 45j : anneau de particules dorées */}
+                  {(fishInstance?.age ?? 0) >= 45 && (
+                    <>
+                      {[0, 1, 2, 3].map(k => (
+                        <motion.div key={`evo-${k}`} className="absolute rounded-full pointer-events-none"
+                          style={{ width: 4, height: 4, zIndex: 3,
+                            background: "rgba(255,215,0,0.9)", filter: "blur(0.5px)",
+                            top: "50%", left: "50%",
+                            transformOrigin: "center center" }}
+                          animate={{
+                            x: [Math.cos((k / 4) * Math.PI * 2) * 18, Math.cos(((k + 1) / 4) * Math.PI * 2) * 18],
+                            y: [Math.sin((k / 4) * Math.PI * 2) * 18, Math.sin(((k + 1) / 4) * Math.PI * 2) * 18],
+                            opacity: [0, 1, 0],
+                            scale: [0.5, 1.3, 0.5],
+                          }}
+                          transition={{ duration: 2, delay: (k / 4) * 2, repeat: Infinity, ease: "easeInOut" }}
+                        />
+                      ))}
+                    </>
+                  )}
                   <SafeImage
                     src={fish.image}
                     mobileSrc={fish.imageMobile}
@@ -1660,6 +4101,22 @@ export default function Aquarium() {
                     fallbackClassName="w-full h-full"
                   />
                 </div>
+
+                {/* Ground shadow ellipse */}
+                <div
+                  className="absolute pointer-events-none"
+                  style={{
+                    bottom: "-6px",
+                    left: "50%",
+                    transform: "translateX(-50%)",
+                    width: `${Math.round(ageScale * 60)}%`,
+                    height: "5px",
+                    borderRadius: "50%",
+                    background: "rgba(0,0,0,0.22)",
+                    filter: "blur(3px)",
+                    opacity: isNightMode ? 0.18 : 0.28,
+                  }}
+                />
                 
                 {/* Excellent health sparkles */}
                 {isExcellentHealth && (
@@ -1686,45 +4143,32 @@ export default function Aquarium() {
                   </>
                 )}
 
-                {/* Crown: only the most dominant fish */}
-                {(() => {
-                  const kingIndex = fishInTank.reduce((best, _, idx) =>
-                    (fishPersonalities[idx]?.dominance ?? 0) > (fishPersonalities[best]?.dominance ?? 0) ? idx : best
-                  , 0);
-                  const isKing = i === kingIndex && (fishPersonalities[i]?.dominance ?? 0) > 0.5;
-                  return isKing ? (
-                  <motion.div
-                    className="absolute -top-8 left-1/2 -translate-x-1/2 text-xl"
-                    animate={{
-                      y: [-2, 2, -2],
-                      rotate: [-5, 5, -5],
-                    }}
-                    transition={{
-                      duration: 2,
-                      repeat: Infinity,
-                      ease: "easeInOut",
-                    }}
-                  >
-                    👑
-                  </motion.div>
-                  ) : null;
-                })()}
 
-                {/* Sleep indicator during night mode */}
-                {isNightMode && (
-                  <motion.div
-                    className="absolute -top-6 left-1/2 -translate-x-1/2 text-xs pointer-events-none"
-                    animate={{ y: [-2, -12, -22], opacity: [0, 0.9, 0] }}
-                    transition={{
-                      duration: 2.5,
-                      delay: i * 0.7,
-                      repeat: Infinity,
-                      repeatDelay: 2,
-                      ease: "easeOut",
-                    }}
-                  >
-                    💤
-                  </motion.div>
+
+
+                {/* TAP SUR LA VITRE : réaction selon personnalité */}
+                {tapFlinchId > 0 && style.isTimid && (
+                  <>
+                    {[0, 1, 2].map(k => (
+                      <motion.div key={`scat-${k}-${tapFlinchId}`}
+                        className="absolute w-1.5 h-1.5 rounded-full pointer-events-none z-20"
+                        style={{ background: 'rgba(150,200,255,0.9)', top: '50%', left: '50%', transform: 'translate(-50%,-50%)' }}
+                        initial={{ x: 0, y: 0, opacity: 0.9, scale: 1 }}
+                        animate={{ x: k === 0 ? -20 : k === 1 ? 16 : -6, y: k === 0 ? -16 : k === 1 ? -6 : 14, opacity: 0, scale: 0.3 }}
+                        transition={{ duration: 0.42, ease: 'easeOut' }}
+                      />
+                    ))}
+                  </>
+                )}
+
+                {/* ONDE SURPRISE : playful fish reacts with amused spin */}
+                {surpriseWaveId > 0 && style.isPlayful && (
+                  <motion.div key={`sw-${surpriseWaveId}`}
+                    className="absolute inset-0 pointer-events-none z-20"
+                    initial={{ rotate: 0, scale: 1 }}
+                    animate={{ rotate: [0, 18, -14, 8, 0], scale: [1, 1.18, 0.92, 1.08, 1] }}
+                    transition={{ duration: 0.7, ease: 'easeInOut' }}
+                  />
                 )}
 
                 {/* Aggressive fish aura */}
@@ -1746,26 +4190,7 @@ export default function Aquarium() {
                   />
                 )}
 
-                {/* Territorial zone - shaded boundary circle around territorial fish */}
-                {style.personality.trait === "territorial" && (
-                  <motion.div
-                    className="absolute rounded-full pointer-events-none -z-10"
-                    style={{
-                      width: 110,
-                      height: 110,
-                      left: "50%",
-                      top: "50%",
-                      transform: "translate(-50%, -50%)",
-                      border: "1.5px dashed rgba(255,180,50,0.35)",
-                      background: "radial-gradient(circle, rgba(255,160,30,0.06) 0%, transparent 70%)",
-                    }}
-                    animate={{
-                      scale: [1, 1.08, 1],
-                      opacity: [0.5, 0.8, 0.5],
-                    }}
-                    transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
-                  />
-                )}
+
                 
                 {/* Health bar indicator */}
                 <HealthBar 
@@ -1869,15 +4294,6 @@ export default function Aquarium() {
                   />
                 )}
                 
-                {isClicked && (
-                  <motion.div
-                    initial={{ scale: 0.5, opacity: 0 }}
-                    animate={{ scale: 2, opacity: [0, 1, 0] }}
-                    transition={{ duration: 0.5 }}
-                    className="absolute inset-0 rounded-full border-2 border-accent"
-                  />
-                )}
-
                 {/* Territorial zone */}
                 {style.personality.trait === "territorial" && (
                   <motion.div
@@ -1913,6 +4329,24 @@ export default function Aquarium() {
                         animate={{ opacity: [0.45, 1, 0.55, 1, 0.45], scale: [0.9, 1.15, 0.95, 1.12, 0.9] }}
                         transition={{ duration: dur, repeat: Infinity, ease: 'easeInOut' }}
                       />
+                      {/* 🌊 Réaction au courant — glow fluctue/se déforme si courant fort */}
+                      {currentStrength > 0.4 && (
+                        <motion.div
+                          className="absolute rounded-full pointer-events-none"
+                          style={{
+                            inset: '-55%',
+                            background: `radial-gradient(ellipse, ${bioColor.ring} 0%, transparent 65%)`,
+                            filter: `blur(${6 + currentStrength * 8}px)`,
+                            originX: currentAngle === 0 ? '30%' : '70%',
+                          }}
+                          animate={{
+                            scaleX: [1, 1 + currentStrength * 0.45, 0.85, 1 + currentStrength * 0.3, 1],
+                            scaleY: [1, 0.82, 1.08, 0.75, 1],
+                            opacity: [0.3, currentStrength * 0.75, 0.2, currentStrength * 0.6, 0.3],
+                          }}
+                          transition={{ duration: Math.max(0.6, dur * 0.55 - currentStrength * 0.3), repeat: Infinity, ease: 'easeInOut' }}
+                        />
+                      )}
                       {/* Floating sparks */}
                       {[...Array(7)].map((_, idx) => (
                         <motion.div
@@ -1970,7 +4404,7 @@ export default function Aquarium() {
         )}
 
         {/* Water sounds toggle - removed, controlled via settings */}
-      </div>
+      </motion.div>
 
       {/* Spacer: keeps fish area same height as when bottom was 5.5rem, background fills full screen */}
       <div className="flex-shrink-0 pointer-events-none" style={{ height: '5.5rem' }} />
@@ -1983,9 +4417,25 @@ export default function Aquarium() {
             animate={{ opacity: 1, x: '-50%', y: 0 }}
             exit={{ opacity: 0, x: '-50%', y: -10 }}
             className="fixed z-[60] pointer-events-none glass-nav rounded-2xl px-4 py-2.5"
-            style={{ top: '175px', left: '50%', width: '80%', maxWidth: '380px' }}
+            style={{ top: '70px', left: '50%', width: '80%', maxWidth: '380px' }}
           >
             <p className="text-sm font-bold text-foreground text-center">{showEventNotif}</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 🔒 Hybride secret débloqué */}
+      <AnimatePresence>
+        {hybridUnlocked && (
+          <motion.div
+            initial={{ opacity: 0, x: '-50%', y: 20, scale: 0.9 }}
+            animate={{ opacity: 1, x: '-50%', y: 0, scale: 1 }}
+            exit={{ opacity: 0, x: '-50%', y: 20, scale: 0.9 }}
+            className="fixed z-[61] pointer-events-none rounded-2xl px-5 py-3"
+            style={{ bottom: '120px', left: '50%', background: 'linear-gradient(135deg, rgba(0,255,200,0.15), rgba(100,50,255,0.15))', border: '1px solid rgba(0,255,200,0.3)', backdropFilter: 'blur(12px)', width: '82%', maxWidth: '380px' }}
+          >
+            <p className="text-sm font-bold text-center" style={{ color: 'rgba(0,255,200,0.95)' }}>🔒 Espèce secrète débloquée !</p>
+            <p className="text-xs text-center mt-0.5" style={{ color: 'rgba(180,255,230,0.7)' }}>Hybride Lumina — Porte exclusive</p>
           </motion.div>
         )}
       </AnimatePresence>
@@ -2198,6 +4648,14 @@ export default function Aquarium() {
                       >
                         <p className="text-sm font-bold text-foreground">🌙 {isNightMode ? "Actif" : "Inactif"}</p>
                       </button>
+                      <button
+                        onClick={() => { setDeepNightMode(v => !v); if (!isNightMode) setIsNightMode(true); }}
+                        className="flex-1 card-dark rounded-2xl px-4 py-3 transition-all"
+                        style={deepNightMode ? { boxShadow: '0 0 0 2px #818cf8, 0 0 12px rgba(129,140,248,0.5)' } : {}}
+                      >
+                        <p className="text-sm font-bold text-foreground">🌌 {deepNightMode ? "Profonde" : "Profonde"}</p>
+                        <p className="text-[10px] text-muted-foreground">{deepNightMode ? "ON" : "OFF"}</p>
+                      </button>
                     </div>
                   </div>
 
@@ -2255,6 +4713,20 @@ export default function Aquarium() {
                         style={weather === "storm" ? { boxShadow: '0 0 0 2px #f59e0b, 0 0 8px rgba(245,158,11,0.35)' } : {}}
                       >
                         <p className="text-sm font-bold text-foreground">⚡ Orage</p>
+                      </button>
+                      <button
+                        onClick={() => setWeather("rain")}
+                        className="card-dark rounded-2xl px-4 py-3 transition-all"
+                        style={weather === "rain" ? { boxShadow: '0 0 0 2px #f59e0b, 0 0 8px rgba(245,158,11,0.35)' } : {}}
+                      >
+                        <p className="text-sm font-bold text-foreground">🌧️ Pluie</p>
+                      </button>
+                      <button
+                        onClick={() => setWeather("fog")}
+                        className="card-dark rounded-2xl px-4 py-3 transition-all"
+                        style={weather === "fog" ? { boxShadow: '0 0 0 2px #f59e0b, 0 0 8px rgba(245,158,11,0.35)' } : {}}
+                      >
+                        <p className="text-sm font-bold text-foreground">🌫️ Brume</p>
                       </button>
                     </div>
                   </div>

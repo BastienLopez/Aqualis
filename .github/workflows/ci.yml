@@ -27,10 +27,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        # npm ci strictly follows package-lock.json which was generated on Windows
-        # and therefore omits Linux-native rollup binaries (@rollup/rollup-linux-x64-gnu).
-        # Using npm install resolves platform-specific optional deps correctly on Linux.
-        run: npm install
+        run: npm ci
 
       - name: Lint
         run: npm run lint

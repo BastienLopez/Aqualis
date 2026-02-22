@@ -30,3 +30,13 @@ android/app/build/
 android/local.properties
 *.apk
 *.aab
+
+# Secrets — never commit
+*.keystore
+*.jks
+key.properties
+.env
+.env.*
+!.env.example
+sentry.properties
+google-services.json

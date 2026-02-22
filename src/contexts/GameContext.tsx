@@ -39,7 +39,7 @@ interface GameContextType extends GameState {
   xpForNext: number;
   xpProgress: number;
   buyFish: (fishId: string) => boolean;
-  completeSesion: (activity: string, minutes: number) => { gold: number; xp: number };
+  completeSession: (activity: string, minutes: number) => { gold: number; xp: number };
   assignFish: (fishId: string, aquariumId: string) => boolean;
   removeFishFromAquarium: (fishId: string, aquariumId: string) => void;
   setActiveAquarium: (id: string) => void;
@@ -90,16 +90,58 @@ const defaultState: GameState = {
 
 const STORAGE_KEY = "aquafocus_state";
 
+function sanitizeGameState(raw: Record<string, unknown>): Partial<GameState> {
+  const s = raw as Partial<GameState>;
+  return {
+    ...s,
+    // Clamp numeric fields to sane ranges
+    gold:    typeof s.gold    === "number" && isFinite(s.gold)    ? Math.max(0, s.gold)    : undefined,
+    totalXP: typeof s.totalXP === "number" && isFinite(s.totalXP) ? Math.max(0, s.totalXP) : undefined,
+    level:   typeof s.level   === "number" && isFinite(s.level)   ? Math.max(0, s.level)   : undefined,
+    // Sanitize userName: max 30 chars, strip < > & " to prevent future XSS if ever used in HTML context
+    userName: typeof s.userName === "string"
+      ? s.userName.replace(/[<>&"]/g, "").trim().slice(0, 30) || "Aquanaute"
+      : undefined,
+    // Must be arrays
+    ownedFishIds:        Array.isArray(s.ownedFishIds)        ? s.ownedFishIds        : undefined,
+    fishInstances:       Array.isArray(s.fishInstances)       ? s.fishInstances       : undefined,
+    breedingPairs:       Array.isArray(s.breedingPairs)       ? s.breedingPairs       : undefined,
+    quests:              Array.isArray(s.quests)              ? s.quests              : undefined,
+    sessions:            Array.isArray(s.sessions)            ? s.sessions            : undefined,
+    unlockedAchievements:Array.isArray(s.unlockedAchievements)? s.unlockedAchievements: undefined,
+  };
+}
+
 function loadState(): GameState {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) return { ...defaultState, ...JSON.parse(saved) };
+    if (saved) {
+      const parsed: Record<string, unknown> = JSON.parse(saved);
+      // Future: if (parsed.schemaVersion !== SAVE_SCHEMA_VERSION) runMigration(parsed);
+      const sanitized = sanitizeGameState(parsed);
+      // Strip undefined keys so defaultState fills missing fields
+      const clean = Object.fromEntries(
+        Object.entries(sanitized).filter(([, v]) => v !== undefined)
+      ) as Partial<GameState>;
+      return { ...defaultState, ...clean };
+    }
   } catch {}
   return defaultState;
 }
 
 function saveState(state: GameState) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  const serialized = JSON.stringify(state);
+  if (serialized.length > 4_000_000) {
+    console.warn(
+      `[AquaFocus] localStorage save approche la limite (${(serialized.length / 1_000_000).toFixed(2)} MB). ` +
+      `Pensez à purger l'historique des sessions ou des quêtes complétées.`
+    );
+  }
+  try {
+    localStorage.setItem(STORAGE_KEY, serialized);
+  } catch (e) {
+    console.error("[AquaFocus] Échec de la sauvegarde localStorage (quota dépassé ?)", e);
+  }
 }
 
 const GameContext = createContext<GameContextType | null>(null);
@@ -220,7 +262,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     return true;
   }, [level, state.gold, state.fishInstances]);
 
-  const completeSesion = useCallback((activity: string, minutes: number) => {
+  const completeSession = useCallback((activity: string, minutes: number) => {
     const today = new Date().toDateString();
     const isFirst = state.lastSessionDate !== today;
     const isSport = activity === "sport";
@@ -313,10 +355,11 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setUserName = useCallback((name: string) => {
-    const trimmed = name.trim();
+    // Sanitize: strip HTML-sensitive characters, enforce max length
+    const sanitized = name.replace(/[<>&"]/g, "").trim().slice(0, 30);
     setState(prev => ({
       ...prev,
-      userName: trimmed.length > 0 ? trimmed : "Aquanaute",
+      userName: sanitized.length > 0 ? sanitized : "Aquanaute",
     }));
   }, []);
 
@@ -574,7 +617,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       xpForNext,
       xpProgress,
       buyFish,
-      completeSesion,
+      completeSession,
       assignFish,
       removeFishFromAquarium,
       setActiveAquarium,

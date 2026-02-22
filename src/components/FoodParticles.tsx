@@ -50,7 +50,7 @@ export default function FoodParticles({ active, onComplete }: FoodParticlesProps
       setVisible(false);
       setParticles([]);
       onComplete();
-    }, 7000);
+    }, 5000);
 
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [active]); // eslint-disable-line react-hooks/exhaustive-deps

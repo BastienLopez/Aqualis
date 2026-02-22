@@ -32,6 +32,9 @@ import aquariumAbyssMobile from "@/assets/aquarium-abyss-mobile.jpg";
 import aquariumPandemonium from "@/assets/aquarium-pandemonium.jpg";
 import aquariumPandemoniumMobile from "@/assets/aquarium-pandemonium-mobile.jpg";
 
+/** Increment each time GameState shape changes to trigger migration. */
+export const SAVE_SCHEMA_VERSION = 1;
+
 export type Rarity = "common" | "rare" | "epic" | "legendary";
 export type ActivityType = "work" | "study" | "sport" | "custom";
 export type FishGender = "male" | "female";
@@ -380,6 +383,7 @@ export const SESSION_DURATIONS = [
 export const COMPANION_FISH_ID = "companion-koi";
 
 export function calculateLevel(totalXP: number): number {
+  if (!Number.isFinite(totalXP) || totalXP < 0) return 0;
   return Math.floor(Math.sqrt(totalXP / 10));
 }
 

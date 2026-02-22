@@ -35,20 +35,26 @@ const FEED_ROTATE_Z = Object.freeze([0, 5, -5, 5, 0]) as number[];
 const CLICK_ROTATE_Z = Object.freeze([0, -15, 15, -10, 10, 0]) as number[];
 const CLICK_SCALE = Object.freeze([1, 1.3, 1.2, 1.1, 1]) as number[];
 
+// Module-level lookup → O(1) fish resolution, no repeated .find() calls
+const FISH_BY_ID = new Map(FISH_CATALOG.map(f => [f.id, f]));
+
 export default function Aquarium() {
   const navigate = useNavigate();
   const location = useLocation();
   const { gold, level, xpProgress, totalXP, activeAquarium, aquariumFish, userName, setActiveAquarium, ownedAquariums, sessions, companionLevel, setUserName, incrementFeedCount, infiniteMode, toggleInfiniteMode, fishInstances, lastAchievementUnlocked, clearLastAchievement, unlockedAchievements, spendGold, breedingPairs } = useGame();
   const theme = AQUARIUM_THEMES.find(t => t.id === activeAquarium) || AQUARIUM_THEMES[0];
   const themeBackground = pickImageSrc(theme.background, theme.backgroundMobile);
-  const fishInTank = (aquariumFish[activeAquarium] || [])
-    .map(id => FISH_CATALOG.find(f => f.id === id))
-    .filter((fish): fish is Fish => Boolean(fish));
+  const fishInTank = useMemo(
+    () => (aquariumFish[activeAquarium] || [])
+      .map(id => FISH_BY_ID.get(id))
+      .filter((fish): fish is Fish => Boolean(fish)),
+    [aquariumFish, activeAquarium]
+  );
   const schoolFish = useMemo(() => {
-    const base = fishInTank.length ? fishInTank : FISH_CATALOG;
-    if (base.length === 0) return [];
+    // Ne pas afficher de poissons fantômes si le tank est vide
+    if (!fishInTank.length) return [];
     const targetCount = 9;
-    return Array.from({ length: targetCount }, (_, i) => base[i % base.length]);
+    return Array.from({ length: targetCount }, (_, i) => fishInTank[i % fishInTank.length]);
   }, [fishInTank]);
 
   const [showWelcome, setShowWelcome] = useState(false);
@@ -62,7 +68,10 @@ export default function Aquarium() {
   const [nameDraft, setNameDraft] = useState(userName);
   const [clickedFishId, setClickedFishId] = useState<string | null>(null);
   const [feedingActive, setFeedingActive] = useState(false);
+  const [feedCooldown, setFeedCooldown] = useState(false);
+  const feedCooldownRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [fishFedPositions, setFishFedPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [fishReturning, setFishReturning] = useState<Set<string>>(new Set());
   const [weather, setWeather] = useState<"storm" | "rain" | "fog" | null>(null);
   const [floorType, setFloorType] = useState<"sand" | "rock" | "reef">("sand");
   const [season, setSeason] = useState<"spring" | "summer" | "autumn" | "winter">("spring");
@@ -727,8 +736,13 @@ export default function Aquarium() {
   // Reset fish positions when starting a new feeding session
   useEffect(() => {
     if (feedingActive) {
-      // Clear saved positions so fish swim to food again
+      // Clear saved positions and returning flags so fish swim to food again
       setFishFedPositions({});
+      setFishReturning(new Set());
+    } else {
+      // When feeding ends, mark all fish as returning so they swim back smoothly
+      const keys = new Set(fishInTank.map((f, i) => `${f!.id}-${i}`));
+      setFishReturning(keys);
     }
   }, [feedingActive]);
 
@@ -1182,11 +1196,21 @@ export default function Aquarium() {
       movementX = movementX.map(x => x + biasPx);
     }
 
-    // 🌊 Depth-based desaturation: fish lower in tank appear more blue/desaturated
+    // 🌊 Depth-based tint: fish deeper in tank get the faintest blue hue shift only.
+    // No brightness or saturation penalty — fish must keep their full vivid colors.
     const depthFactor = Math.max(0, (startY - 25) / 70); // 0 near surface, ~1 at 95%
-    const depthFilter = depthFactor > 0.06
-      ? `saturate(${(1 - depthFactor * 0.28).toFixed(2)}) brightness(${(1 - depthFactor * 0.10).toFixed(2)}) hue-rotate(${Math.round(depthFactor * 14)}deg)`
+    const depthFilter = depthFactor > 0.3
+      ? `hue-rotate(${Math.round(depthFactor * 6)}deg) saturate(${(1 - depthFactor * 0.08).toFixed(2)})`
       : undefined;
+
+    // 🐟 Realistic body tilt: derive nose-up / nose-down angle from Y movement deltas.
+    // When fish swims upward (negative dy) → slight nose-up (negative deg).
+    // When fish dives (positive dy) → slight nose-down (positive deg).
+    const tiltKeyframes = movementY.map((y, k) => {
+      const nextY = movementY[k + 1] ?? movementY[Math.max(0, k - 1)];
+      const dy = nextY - y;
+      return Math.max(-14, Math.min(14, dy * 0.045));
+    });
 
     // 🪨 Calm zone near HidingRocks (clusters at ~5%, ~40%, ~76%) — fish slow down
     const nearRock = [5, 40, 76].some(rx => Math.abs(startXPct - rx) < 10);
@@ -1209,6 +1233,7 @@ export default function Aquarium() {
       isAggressive,
       isPlayful,
       depthFilter,
+      tiltKeyframes,
     };
   }, [fishInTank, fishPersonalities, isNightMode, currentStrength, currentAngle, season, filterBroken]);
 
@@ -1714,7 +1739,13 @@ export default function Aquarium() {
       {/* Food particles - fixed overlay above everything */}
       <FoodParticles 
         active={feedingActive} 
-        onComplete={() => setFeedingActive(false)} 
+        onComplete={() => {
+          setFeedingActive(false);
+          // Cooldown 2s pour éviter le spam de nourrissage (quêtes feed)
+          if (feedCooldownRef.current) clearTimeout(feedCooldownRef.current);
+          setFeedCooldown(true);
+          feedCooldownRef.current = setTimeout(() => setFeedCooldown(false), 2000);
+        }} 
       />
 
       {/* Weather effects */}
@@ -2843,11 +2874,12 @@ export default function Aquarium() {
 
                 {/* Feed button */}
                 <button
+                  aria-label="Nourrir les poissons"
                   onClick={() => {
                     setFeedingActive(true);
                     incrementFeedCount();
                   }}
-                  disabled={feedingActive}
+                  disabled={feedingActive || feedCooldown}
                   className="flex items-center gap-1.5 disabled:opacity-50"
                 >
                   <span className="text-base">🍴</span>
@@ -3029,13 +3061,13 @@ export default function Aquarium() {
         }
         style={{
           filter: deepNightMode
-            ? "saturate(1.35) hue-rotate(200deg) brightness(0.68)"
+            ? "saturate(1.15) hue-rotate(200deg) brightness(0.84)"
             : tankMood === "calm"
-            ? "saturate(1.08) brightness(1.02)"
+            ? "saturate(1.12) brightness(1.03)"
             : tankMood === "stressed"
-              ? "saturate(0.80) brightness(0.97)"
+              ? "saturate(0.93) brightness(0.99)"
               : tankMood === "chaotic"
-                ? "saturate(0.65) brightness(0.94)"
+                ? "saturate(0.90) brightness(0.97)"
                 : undefined,
         }}
       >
@@ -3055,12 +3087,11 @@ export default function Aquarium() {
         <div className="absolute inset-0 pointer-events-none z-[2]" style={{
           background: "linear-gradient(to bottom, transparent 0%, transparent 35%, rgba(10,30,80,0.08) 65%, rgba(5,15,60,0.22) 100%)",
         }} />
-        {/* 🌋 Perte de saturation en profondeur — grisâtre sur 40% bas du tank */}
+        {/* Subtle depth tint — very soft transparency only, no multiply blend that would darken fish */}
         <div className="absolute left-0 right-0 bottom-0 pointer-events-none z-[2]" style={{ height: '40%' }}>
           <div style={{
             height: '100%',
-            background: 'linear-gradient(to bottom, transparent 0%, rgba(38,38,55,0.07) 55%, rgba(18,18,32,0.16) 100%)',
-            mixBlendMode: 'multiply',
+            background: 'linear-gradient(to bottom, transparent 0%, rgba(5,12,35,0.05) 65%, rgba(5,12,35,0.10) 100%)',
           }} />
         </div>
         {/* Eau légèrement verdâtre si nitrates hauts (déséquilibre écosystème) */}
@@ -3565,6 +3596,8 @@ export default function Aquarium() {
           // Get saved position after feeding (if exists)
           const savedPos = fishFedPositions[fishKey];
           const hasEaten = !feedingActive && savedPos;
+          // Fish is swimming back to origin after feeding
+          const isReturning = !feedingActive && fishReturning.has(fishKey);
 
           // Fish aging: older fish are slightly larger
           const fishInstance = fishInstances.find((fi) => fi.fishId === fish.id);
@@ -3692,23 +3725,27 @@ export default function Aquarium() {
                         ? parentFollowX + 18
                         : feedingActive
                           ? feedingTargetX
-                          : effectiveMovX,
+                          : isReturning
+                            ? 0
+                            : effectiveMovX,
                   y: followMouse
                       ? mouseTargetY
                       : isBaby && parentFollowY !== 0
                         ? parentFollowY + 10
                         : feedingActive
                           ? feedingTargetY
-                          : isCriticalHealth
-                            ? effectiveMovY.map(y => y + 25)
-                            : effectiveMovY,
+                          : isReturning
+                            ? 0
+                            : isCriticalHealth
+                              ? effectiveMovY.map(y => y + 25)
+                              : effectiveMovY,
                   rotateZ: isClicked
                     ? CLICK_ROTATE_Z
                     : isCriticalHealth
                       ? CRIT_ROTATE_Z
                       : feedingActive
                         ? FEED_ROTATE_Z
-                        : SWIM_ROTATE_Z,
+                        : style.tiltKeyframes,
                   scale: isClicked ? CLICK_SCALE : 1,
                   scaleX: followMouse
                     ? (mouseTargetX >= 0 ? 1 : -1)
@@ -3721,12 +3758,16 @@ export default function Aquarium() {
                       ? { duration: 0.8, ease: "easeOut" }
                       : feedingActive
                         ? { duration: 0.4 + i * 0.04, ease: [0.1, 0, 0.3, 1] }
-                        : { duration: style.duration * healthSpeedMod, repeat: Infinity, ease: "easeInOut", delay: style.delay },
+                        : isReturning
+                          ? { duration: 1.2 + i * 0.07, ease: [0.25, 0.1, 0.25, 1] }
+                          : { duration: style.duration * healthSpeedMod, repeat: Infinity, ease: "easeInOut", delay: style.delay },
                   y: followMouse
                       ? { duration: 0.8, ease: "easeOut" }
                       : feedingActive
                         ? { duration: 0.4 + i * 0.04, ease: [0.1, 0, 0.3, 1] }
-                        : { duration: style.duration * healthSpeedMod, repeat: Infinity, ease: "easeInOut", delay: style.delay },
+                        : isReturning
+                          ? { duration: 1.2 + i * 0.07, ease: [0.25, 0.1, 0.25, 1] }
+                          : { duration: style.duration * healthSpeedMod, repeat: Infinity, ease: "easeInOut", delay: style.delay },
                   rotateZ: isClicked
                     ? { duration: 0.6, ease: "easeOut" }
                     : isCriticalHealth
@@ -3746,6 +3787,14 @@ export default function Aquarium() {
                       ...prev,
                       [fishKey]: { x: feedingTargetX, y: feedingTargetY }
                     }));
+                  }
+                  // Once fish has returned to origin, let it resume normal loop
+                  if (isReturning) {
+                    setFishReturning(prev => {
+                      const next = new Set(prev);
+                      next.delete(fishKey);
+                      return next;
+                    });
                   }
                 }}
                 onClick={() => {
@@ -4071,35 +4120,47 @@ export default function Aquarium() {
                       ))}
                     </>
                   )}
-                  <SafeImage
-                    src={fish.image}
-                    mobileSrc={fish.imageMobile}
-                    alt=""
-                    priority="high"
-                    className={`w-full h-full object-contain drop-shadow-2xl transition-all duration-1000 ${
-                      style.personality.stressed 
-                        ? "saturate-50 opacity-70" 
-                        : isExcellentHealth
-                          ? "saturate-150 brightness-110"
-                          : isLowHealth
-                            ? "saturate-50 opacity-75"
-                            : isCriticalHealth
-                              ? "saturate-30 opacity-60"
-                              : ""
-                    }`}
-                    style={{
-                      filter: isCriticalHealth
-                        ? "saturate(0.3) brightness(0.7) contrast(0.8)"
-                        : isLowHealth
-                          ? "saturate(0.5) brightness(0.85)"
-                          : isExcellentHealth
-                            ? "saturate(1.5) brightness(1.1) drop-shadow(0 0 8px rgba(255,215,0,0.3))"
-                            : style.personality.stressed 
-                              ? "saturate(0.5) brightness(0.9)" 
-                              : undefined,
+                  {/* 🐠 Fin-bob — subtle body oscillation for realistic swimming feel */}
+                  <motion.div
+                    style={{ width: '100%', height: '100%' }}
+                    animate={{ scaleY: isCriticalHealth ? [1, 1.02, 0.99, 1] : [1, 1.035, 0.975, 1.02, 0.99, 1] }}
+                    transition={{
+                      duration: isCriticalHealth ? 2.4 : (style.personality.energy > 0.7 ? 0.75 : style.personality.energy < 0.4 ? 1.6 : 1.1) + (i % 5) * 0.09,
+                      repeat: Infinity,
+                      ease: "easeInOut",
+                      delay: style.delay * 0.25,
                     }}
-                    fallbackClassName="w-full h-full"
-                  />
+                  >
+                    <SafeImage
+                      src={fish.image}
+                      mobileSrc={fish.imageMobile}
+                      alt=""
+                      priority="high"
+                      className={`w-full h-full object-contain drop-shadow-2xl transition-all duration-1000 ${
+                        style.personality.stressed 
+                          ? "saturate-50 opacity-70" 
+                          : isExcellentHealth
+                            ? "saturate-150 brightness-110"
+                            : isLowHealth
+                              ? "saturate-50 opacity-75"
+                              : isCriticalHealth
+                                ? "saturate-30 opacity-60"
+                                : ""
+                      }`}
+                      style={{
+                        filter: isCriticalHealth
+                          ? "saturate(0.3) brightness(0.7) contrast(0.8)"
+                          : isLowHealth
+                            ? "saturate(0.5) brightness(0.85)"
+                            : isExcellentHealth
+                              ? "saturate(1.5) brightness(1.1) drop-shadow(0 0 8px rgba(255,215,0,0.3))"
+                              : style.personality.stressed 
+                                ? "saturate(0.5) brightness(0.9)" 
+                                : undefined,
+                      }}
+                      fallbackClassName="w-full h-full"
+                    />
+                  </motion.div>
                 </div>
 
                 {/* Ground shadow ellipse */}

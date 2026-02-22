@@ -56,7 +56,7 @@ const MOTIVATIONAL = [
 
 export default function Session() {
   const navigate = useNavigate();
-  const { completeSesion, level, totalXP } = useGame();
+  const { completeSession, level, totalXP } = useGame();
   const [phase, setPhase] = useState<Phase>("setup");
   const [activity, setActivity] = useState("work");
   const [durationIdx, setDurationIdx] = useState(0);
@@ -76,7 +76,7 @@ export default function Session() {
 
   const finishSession = useCallback(
     (activityId: string, minutes: number) => {
-      const r = completeSesion(activityId, minutes);
+      const r = completeSession(activityId, minutes);
       const activityLabel = activities.find(a => a.id === activityId)?.label ?? activityId;
       const durationLabel = SESSION_DURATIONS.find(d => d.minutes === minutes)?.label ?? `${minutes} min`;
       if (quoteRef.current) clearInterval(quoteRef.current);
@@ -84,7 +84,7 @@ export default function Session() {
         state: { sessionComplete: { reward: r, activityLabel, durationLabel } },
       });
     },
-    [completeSesion, navigate]
+    [completeSession, navigate]
   );
 
   const startSession = () => {

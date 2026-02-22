@@ -66,7 +66,7 @@ const App = () => (
       <Sonner />
       <GameProvider>
         <ImagePreloader />
-        <BrowserRouter>
+        <BrowserRouter basename={import.meta.env.BASE_URL}>
           <AppLayout />
         </BrowserRouter>
       </GameProvider>

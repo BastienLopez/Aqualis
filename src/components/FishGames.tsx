@@ -14,11 +14,11 @@ interface FishGamesProps {
 }
 
 const GAMES: { type: GameType; label: string; desc: string; emoji: string }[] = [
-  { type: "schooling", label: "Banc de poissons !",  desc: "Les poissons nagent en formation",            emoji: "??" },
-  { type: "hiding",    label: "Cache-cache !",        desc: "Les poissons se cachent derriere les rochers",emoji: "??" },
-  { type: "race",      label: "Course aquatique !",   desc: "Qui sera le plus rapide ?",                   emoji: "?" },
-  { type: "circle",    label: "Danse circulaire !",   desc: "Nage synchronisee en ronde",                  emoji: "??" },
-  { type: "leader",    label: "Suivre le leader !",   desc: "Tous suivent le grand poisson",               emoji: "??" },
+  { type: "schooling", label: "Banc de poissons !",  desc: "Les poissons nagent en formation",            emoji: "🐟" },
+  { type: "hiding",    label: "Cache-cache !",        desc: "Les poissons se cachent derriere les rochers",emoji: "🙈" },
+  { type: "race",      label: "Course aquatique !",   desc: "Qui sera le plus rapide ?",                   emoji: "🏁" },
+  { type: "circle",    label: "Danse circulaire !",   desc: "Nage synchronisee en ronde",                  emoji: "🌀" },
+  { type: "leader",    label: "Suivre le leader !",   desc: "Tous suivent le grand poisson",               emoji: "👑" },
 ];
 
 function pickFish(list: Fish[] | undefined, n: number): Fish[] {

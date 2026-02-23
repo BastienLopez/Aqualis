@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef, memo } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useGame } from "@/contexts/GameContext";
@@ -35,8 +35,99 @@ const FEED_ROTATE_Z = Object.freeze([0, 5, -5, 5, 0]) as number[];
 const CLICK_ROTATE_Z = Object.freeze([0, -15, 15, -10, 10, 0]) as number[];
 const CLICK_SCALE = Object.freeze([1, 1.3, 1.2, 1.1, 1]) as number[];
 
+const seeded = (seed: number) => {
+  const x = Math.sin(seed) * 10000;
+  return x - Math.floor(x);
+};
+const randRange = (seed: number, min: number, max: number) => min + seeded(seed) * (max - min);
+
 // Module-level lookup → O(1) fish resolution, no repeated .find() calls
 const FISH_BY_ID = new Map(FISH_CATALOG.map(f => [f.id, f]));
+
+type FishStyleSnapshot = {
+  startX: string;
+  startY: string;
+  duration: number;
+  movementX: number[];
+  movementY: number[];
+};
+
+interface FishDynamicsProps {
+  fishInTank: Fish[];
+  getFishStyle: (i: number) => FishStyleSnapshot;
+  nitrateLevel: number;
+  onShrimpCaught: () => void;
+}
+
+const FishDynamics = memo(function FishDynamics({
+  fishInTank,
+  getFishStyle,
+  nitrateLevel,
+  onShrimpCaught,
+}: FishDynamicsProps) {
+  const [fishPositions, setFishPositions] = useState<Record<string, { x: number; y: number }>>({});
+  const [carnivorePositions, setCarnivorePositions] = useState<{ x: number; y: number }[]>([]);
+
+  useEffect(() => {
+    if (fishInTank.length === 0) {
+      setFishPositions({});
+      setCarnivorePositions([]);
+      return;
+    }
+
+    const updatePositions = () => {
+      const newPositions: Record<string, { x: number; y: number }> = {};
+      const newCarnivores: { x: number; y: number }[] = [];
+
+      fishInTank.forEach((fish, i) => {
+        const fishKey = `${fish.id}-${i}`;
+        const style = getFishStyle(i);
+
+        const baseX = parseFloat(style.startX);
+        const baseY = parseFloat(style.startY);
+
+        const movementPhase = (Date.now() / (style.duration * 1000)) % 1;
+        const movementIndex = Math.floor(movementPhase * (style.movementX.length - 1));
+        const offsetX = style.movementX[movementIndex] || 0;
+        const offsetY = style.movementY[movementIndex] || 0;
+
+        const currentX = baseX + offsetX;
+        const currentY = baseY + offsetY;
+
+        newPositions[fishKey] = { x: currentX, y: currentY };
+
+        if (fish.diet === "Carnivore") {
+          newCarnivores.push({ x: currentX, y: currentY });
+        }
+      });
+
+      setFishPositions(newPositions);
+      setCarnivorePositions(newCarnivores);
+    };
+
+    updatePositions();
+    const updateInterval = setInterval(updatePositions, 2200); // lower frequency to reduce re-render pressure
+
+    return () => clearInterval(updateInterval);
+  }, [fishInTank, getFishStyle]);
+
+  return (
+    <>
+      <SandParticles 
+        fishPositions={Object.entries(fishPositions).map(([id, pos]) => ({
+          x: pos.x,
+          y: pos.y,
+          active: pos.y > 70,
+        }))}
+      />
+      <ShrimpPrey 
+        carnivorePositions={carnivorePositions}
+        nitrateLevel={nitrateLevel}
+        onShrimpCaught={onShrimpCaught}
+      />
+    </>
+  );
+});
 
 export default function Aquarium() {
   const navigate = useNavigate();
@@ -50,6 +141,14 @@ export default function Aquarium() {
       .filter((fish): fish is Fish => Boolean(fish)),
     [aquariumFish, activeAquarium]
   );
+  const fishIdCountsInTank = useMemo(() => {
+    const counts = new Map<string, number>();
+    const ids = aquariumFish[activeAquarium] || [];
+    for (const id of ids) {
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return counts;
+  }, [aquariumFish, activeAquarium]);
   const schoolFish = useMemo(() => {
     // Ne pas afficher de poissons fantômes si le tank est vide
     if (!fishInTank.length) return [];
@@ -79,8 +178,6 @@ export default function Aquarium() {
   const [deepNightMode, setDeepNightMode] = useState(false);
   const [showDecorations, setShowDecorations] = useState(true);
   const [mousePosition, setMousePosition] = useState<{ x: number; y: number } | null>(null);
-  const [fishPositions, setFishPositions] = useState<Record<string, { x: number; y: number }>>({});
-  const [carnivorePositions, setCarnivorePositions] = useState<{ x: number; y: number }[]>([]);
   const [fishHealths, setFishHealths] = useState<Record<string, number>>({});
   const [asrmMode, setAsrmMode] = useState(false);
   const [waterQuality, setWaterQuality] = useState({ ph: 7.2, nitrates: 10, health: 95 });
@@ -88,6 +185,11 @@ export default function Aquarium() {
   const [showEventNotif, setShowEventNotif] = useState<string | null>(null);
   // Detect breeding completion (pair removed = baby hatched)
   const prevBreedingCountRef = useRef(breedingPairs.length);
+
+  const reduceEffects = useMemo(() => {
+    if (typeof window === "undefined") return false;
+    return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+  }, []);
   useEffect(() => {
     if (breedingPairs.length < prevBreedingCountRef.current) {
       // Check if the latest baby has special hidden traits
@@ -124,6 +226,12 @@ export default function Aquarium() {
   /** Current water direction: angle degrees (0=right, 180=left) — changes every ~45s */
   const [currentAngle, setCurrentAngle] = useState(0);
   const [currentStrength, setCurrentStrength] = useState(0.4); // 0–1
+  // Refs so getFishStyle can read latest current without being a useCallback dep
+  // (avoids restarting ALL Framer Motion fish animations every 40–65s)
+  const currentAngleRef = useRef(currentAngle);
+  const currentStrengthRef = useRef(currentStrength);
+  useEffect(() => { currentAngleRef.current = currentAngle; }, [currentAngle]);
+  useEffect(() => { currentStrengthRef.current = currentStrength; }, [currentStrength]);
   /** 0–1 lunar phase, 0=new moon (dark), 1=full moon (bright) */
   const lunarPhase = useMemo(() => {
     const knownNewMoon = new Date("2024-01-11").getTime();
@@ -252,15 +360,68 @@ export default function Aquarium() {
   const [fingerPos, setFingerPos] = useState<{ x: number; y: number } | null>(null);
   const [isFollowActive, setIsFollowActive] = useState(false);
   const fingerSpeedRef = useRef<{ x: number; y: number; t: number }>({ x: 50, y: 50, t: 0 });
+  const lastFingerUpdateRef = useRef<{ x: number; y: number; t: number }>({ x: 50, y: 50, t: 0 });
   const followTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shouldUpdateFingerPos = useCallback((xPct: number, yPct: number, nowMs: number) => {
+    const last = lastFingerUpdateRef.current;
+    const delta = Math.abs(xPct - last.x) + Math.abs(yPct - last.y);
+    const dt = nowMs - last.t;
+    if (dt < 40 && delta < 0.4) return false;
+    lastFingerUpdateRef.current = { x: xPct, y: yPct, t: nowMs };
+    return true;
+  }, []);
   /** Onde surprise — tap when playful fish present triggers amused spin */
   const [surpriseWaveId, setSurpriseWaveId] = useState(0);
+
+  // Stabilize viewport height to avoid Android WebView resize jitter (status/nav bars)
+  const [stableViewport, setStableViewport] = useState<{ w: number; h: number }>(() => {
+    if (typeof window === "undefined") return { w: 0, h: 0 };
+    return { w: window.innerWidth, h: window.innerHeight };
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleResize = () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      setStableViewport(prev => {
+        const heightDelta = Math.abs(h - prev.h);
+        const widthDelta = Math.abs(w - prev.w);
+        if (widthDelta > 80 || heightDelta > 140) {
+          return { w, h };
+        }
+        return prev;
+      });
+    };
+    window.addEventListener("resize", handleResize, { passive: true });
+    window.visualViewport?.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.visualViewport?.removeEventListener("resize", handleResize);
+    };
+  }, []);
 
   /** Bioluminescent flash — sync entre poissons luminescents proches */
   const [bioFlashActive, setBioFlashActive] = useState(false);
   /** Response flash — Fish B answers ~700ms after Fish A's initial ping */
   const [bioResponseActive, setBioResponseActive] = useState(false);
-  const bioFishCount = fishInstances.filter(fi => fi.hiddenTraits?.bioluminescent && fi.hiddenTraits.bioluminescent !== "none").length;
+  const bioFishCount = useMemo(() => {
+    if (fishIdCountsInTank.size === 0) return 0;
+    const counts = new Map(fishIdCountsInTank);
+    let total = 0;
+    for (const inst of fishInstances) {
+      const remaining = counts.get(inst.fishId);
+      if (!remaining) continue;
+      const bio = inst.hiddenTraits?.bioluminescent;
+      if (!bio || bio === "none") continue;
+      total += 1;
+      const next = remaining - 1;
+      if (next > 0) counts.set(inst.fishId, next);
+      else counts.delete(inst.fishId);
+      if (counts.size === 0) break;
+    }
+    return total;
+  }, [fishIdCountsInTank, fishInstances]);
+  const showBioCollectivePulse = bioFishCount >= 3 && isNightMode;
 
   // ── NEW STATES: Interactions & Effects ───────────────────────────────────
   /** Ondulations sur maintien du doigt / souris */
@@ -270,8 +431,6 @@ export default function Aquarium() {
   /** Tempête lumineuse — tous bio-poissons brillent fort 10s */
   const [lightStormActive, setLightStormActive] = useState(false);
 
-  /** Synchronisation collective — 3+ bio poissons pulsent à l'unisson */
-  const [bioCollectivePulse, setBioCollectivePulse] = useState(0);
 
   /** Migration nocturne — groupe lumineux traverse le tank lentement */
   const [nocturnalMigrationActive, setNocturnalMigrationActive] = useState(false);
@@ -343,41 +502,6 @@ export default function Aquarium() {
     };
   }, []);
 
-  // Update fish positions for sand particles and shrimp prey systems
-  useEffect(() => {
-    const updateInterval = setInterval(() => {
-      const newPositions: Record<string, { x: number; y: number }> = {};
-      const newCarnivores: { x: number; y: number }[] = [];
-      
-      fishInTank.forEach((fish, i) => {
-        const fishKey = `${fish.id}-${i}`;
-        const style = getFishStyle(i);
-        
-        const baseX = parseFloat(style.startX);
-        const baseY = parseFloat(style.startY);
-        
-        const movementPhase = (Date.now() / (style.duration * 1000)) % 1;
-        const movementIndex = Math.floor(movementPhase * (style.movementX.length - 1));
-        const offsetX = style.movementX[movementIndex] || 0;
-        const offsetY = style.movementY[movementIndex] || 0;
-        
-        const currentX = baseX + offsetX;
-        const currentY = baseY + offsetY;
-        
-        newPositions[fishKey] = { x: currentX, y: currentY };
-        
-        if (fish.diet === "Carnivore") {
-          newCarnivores.push({ x: currentX, y: currentY });
-        }
-      });
-      
-      setFishPositions(newPositions);
-      setCarnivorePositions(newCarnivores);
-    }, 900); // 900ms — visual system, no need for 500ms ticks
-    
-    return () => clearInterval(updateInterval);
-  }, [fishInTank, isNightMode, fishPersonalities]);
-
   // Stress detection system: overcrowding and water quality
   useEffect(() => {
     fishPersonalities.forEach((personality, i) => {
@@ -403,30 +527,41 @@ export default function Aquarium() {
 
   // Initialize fish health when fish change
   useEffect(() => {
-    const newHealths: Record<string, number> = {};
-    fishInTank.forEach((fish, i) => {
-      const fishKey = `${fish!.id}-${i}`;
-      if (!(fishKey in fishHealths)) {
-        newHealths[fishKey] = 100; // Start at full health
-      } else {
-        newHealths[fishKey] = fishHealths[fishKey];
-      }
+    setFishHealths(prev => {
+      const next: Record<string, number> = {};
+      let changed = false;
+      fishInTank.forEach((fish, i) => {
+        const fishKey = `${fish!.id}-${i}`;
+        const existing = prev[fishKey];
+        const value = existing ?? 100; // Start at full health
+        next[fishKey] = value;
+        if (existing !== value) changed = true;
+      });
+      if (!changed && Object.keys(prev).length === Object.keys(next).length) return prev;
+      return next;
     });
-    setFishHealths(newHealths);
   }, [fishInTank]);
 
   // Health system: decrease/increase over time based on conditions
   useEffect(() => {
+    if (fishInTank.length === 0) {
+      setFishHealths(prev => (Object.keys(prev).length ? {} : prev));
+      return;
+    }
     const healthInterval = setInterval(() => {
       setFishHealths(prev => {
-        const updated = { ...prev };
-        
+        const updated: Record<string, number> = {};
+        let changed = false;
+
         fishInTank.forEach((fish, i) => {
           const fishKey = `${fish!.id}-${i}`;
           const personality = fishPersonalities[i];
-          const currentHealth = updated[fishKey] || 100;
+          const currentHealth = prev[fishKey] ?? 100;
           
-          if (currentHealth <= 0) return; // Fish is already dead
+          if (currentHealth <= 0) {
+            updated[fishKey] = currentHealth;
+            return; // Fish is already dead
+          }
           
           let healthChange = 0;
           
@@ -441,9 +576,12 @@ export default function Aquarium() {
           if (!personality.stressed && waterQuality.health > 90) healthChange += 0.3;
           
           // Update health (clamp between 0 and 100)
-          updated[fishKey] = Math.max(0, Math.min(100, currentHealth + healthChange));
+          const nextHealth = Math.max(0, Math.min(100, currentHealth + healthChange));
+          updated[fishKey] = nextHealth;
+          if (nextHealth !== currentHealth) changed = true;
         });
-        
+
+        if (!changed && Object.keys(prev).length === Object.keys(updated).length) return prev;
         return updated;
       });
     }, 3000); // Update every 3 seconds
@@ -725,8 +863,10 @@ export default function Aquarium() {
           ? Math.min(50, prev.nitrates + 2) 
           : Math.max(0, prev.nitrates - 1);
         const newHealth = Math.max(60, Math.min(100, 100 - (Math.abs(7.2 - newPh) * 10) - (newNitrates * 0.5)));
-        
-        return { ph: newPh, nitrates: newNitrates, health: Math.floor(newHealth) };
+
+        const next = { ph: newPh, nitrates: newNitrates, health: Math.floor(newHealth) };
+        if (next.ph === prev.ph && next.nitrates === prev.nitrates && next.health === prev.health) return prev;
+        return next;
       });
     }, 30000); // Check every 30s
     
@@ -760,10 +900,11 @@ export default function Aquarium() {
   // ── NITRATES : crevettes/déchets augmentent les nitrates doucement ────────
   useEffect(() => {
     const iv = setInterval(() => {
-      setWaterQuality(prev => ({
-        ...prev,
-        nitrates: Math.min(50, prev.nitrates + (fishInTank.length > 3 ? 0.4 : 0.15)),
-      }));
+      setWaterQuality(prev => {
+        const nextNitrates = Math.min(50, prev.nitrates + (fishInTank.length > 3 ? 0.4 : 0.15));
+        if (nextNitrates === prev.nitrates) return prev;
+        return { ...prev, nitrates: nextNitrates };
+      });
     }, 20000);
     return () => clearInterval(iv);
   }, [fishInTank.length]);
@@ -785,10 +926,11 @@ export default function Aquarium() {
   useEffect(() => {
     if (herbivoreCount === 0) return;
     const iv = setInterval(() => {
-      setWaterQuality(prev => ({
-        ...prev,
-        nitrates: Math.max(0, prev.nitrates - herbivoreCount * 0.4),
-      }));
+      setWaterQuality(prev => {
+        const nextNitrates = Math.max(0, prev.nitrates - herbivoreCount * 0.4);
+        if (nextNitrates === prev.nitrates) return prev;
+        return { ...prev, nitrates: nextNitrates };
+      });
     }, 25000);
     return () => clearInterval(iv);
   }, [herbivoreCount]);
@@ -796,10 +938,11 @@ export default function Aquarium() {
   // ── ÉCOSYSTÈME : nourrir les poissons → léger pic de nitrates ────────────
   useEffect(() => {
     if (feedingActive) {
-      setWaterQuality(prev => ({
-        ...prev,
-        nitrates: Math.min(50, prev.nitrates + 1.2),
-      }));
+      setWaterQuality(prev => {
+        const nextNitrates = Math.min(50, prev.nitrates + 1.2);
+        if (nextNitrates === prev.nitrates) return prev;
+        return { ...prev, nitrates: nextNitrates };
+      });
     }
   }, [feedingActive]);
 
@@ -869,15 +1012,6 @@ export default function Aquarium() {
     return () => clearInterval(iv);
   }, [bioFishCount, isNightMode, waterQuality]);
 
-  // ── SYNCHRONISATION COLLECTIVE — 3+ bio poissons battent en phase ────────
-  useEffect(() => {
-    if (bioFishCount < 3 || !isNightMode) return;
-    const iv = setInterval(() => {
-      setBioCollectivePulse(v => v + 1);
-    }, 2500);
-    return () => clearInterval(iv);
-  }, [bioFishCount, isNightMode]);
-
   // ── MIGRATION NOCTURNE — traversée lente du tank sous la lune ─────────────
   useEffect(() => {
     if (bioFishCount < 2 || !isNightMode) return;
@@ -902,10 +1036,11 @@ export default function Aquarium() {
       setCameraFocus({ x: 50, y: 48, zoom: 1.06 });
       const t = setTimeout(() => setCameraFocus(null), 12000);
       return () => clearTimeout(t);
-    } else {
+    }
+    if (cameraFocus) {
       setCameraFocus(null);
     }
-  }, [showRareEvent]);
+  }, [showRareEvent, cameraFocus]);
 
   // ── HYBRIDE SECRET — bébé avec bioluminescent + fractal des 2 parents ──────
   useEffect(() => {
@@ -1190,9 +1325,9 @@ export default function Aquarium() {
     }
     
     // Courant physique : biais des trajectoires vers la direction du courant
-    if (currentStrength > 0.1) {
-      const biasDir = (Math.cos((currentAngle * Math.PI) / 180) > 0 ? 1 : -1);
-      const biasPx = Math.round(currentStrength * 28 * biasDir);
+    if (currentStrengthRef.current > 0.1) {
+      const biasDir = (Math.cos((currentAngleRef.current * Math.PI) / 180) > 0 ? 1 : -1);
+      const biasPx = Math.round(currentStrengthRef.current * 28 * biasDir);
       movementX = movementX.map(x => x + biasPx);
     }
 
@@ -1235,19 +1370,33 @@ export default function Aquarium() {
       depthFilter,
       tiltKeyframes,
     };
-  }, [fishInTank, fishPersonalities, isNightMode, currentStrength, currentAngle, season, filterBroken]);
+  }, [fishInTank, fishPersonalities, isNightMode, season, filterBroken]);
 
   // Stable memoized styles — prevents Framer Motion from restarting on every state update
   const fishStyles = useMemo(
     () => fishInTank.map((_, i) => getFishStyle(i)),
     [fishInTank, getFishStyle]
   );
+  const fishXPositions = useMemo(
+    () => fishStyles.map(s => {
+      const x = parseFloat(s.startX);
+      return Number.isFinite(x) ? x : 50;
+    }),
+    [fishStyles]
+  );
+
+  // Count schooling fish once (used for defensive formation)
+  const schoolCount = useMemo(
+    () => fishInTank.filter(f => f.behavior === "schooling").length,
+    [fishInTank]
+  );
 
   // Detects whether a carnivore is close enough to threaten schooling fish
+  // Stable: only depends on fish catalog (no 900ms position updates) — prevents animation restarts
   const predatorNearSchool = useMemo(() => {
-    if (carnivorePositions.length === 0) return false;
-    return carnivorePositions.some(c => c.x > 25 && c.x < 80 && c.y > 20 && c.y < 92);
-  }, [carnivorePositions]);
+    const hasCarnivore = fishInTank.some(f => f.diet === "Carnivore");
+    return hasCarnivore && schoolCount >= 4;
+  }, [fishInTank, schoolCount]);
 
   const tintHue = waterTint; // 0-360
   const schoolStartX = schoolDirection === "right" ? "-30%" : "130%";
@@ -1267,6 +1416,107 @@ export default function Aquarium() {
   const hourlyTempDelta = Math.round(Math.sin(((currentHour - 14) / 12) * Math.PI) * 2);
   const dynamicTemp = currentTemperature + hourlyTempDelta + (filterBroken ? -3 : 0);
 
+  const fishMotion = useMemo(() => {
+    const schoolFormScale = predatorNearSchool ? 0.4 : tankMood === "calm" ? 1.22 : 1.0;
+
+    return fishStyles.map((style, i) => {
+      const fish = fishInTank[i];
+      const fishTempStr = fish?.temperature ?? "";
+      const isWarmFish = /2[4-9]|30/.test(fishTempStr);
+      const isColdFish = /1[6-9]|2[0-1]/.test(fishTempStr);
+      const thermalNudge =
+        isWarmFish && dynamicTemp > 26 ? -14 :
+        isWarmFish && dynamicTemp < 22 ?  12 :
+        isColdFish && dynamicTemp < 22 ? -12 :
+        isColdFish && dynamicTemp > 26 ?  14 : 0;
+
+      const baseX = style.movementX;
+      const baseY = thermalNudge !== 0
+        ? style.movementY.map(y => y + thermalNudge)
+        : style.movementY;
+
+      let schoolX = baseX;
+      let schoolY = baseY;
+
+      if (fish?.behavior === "schooling") {
+        if (predatorNearSchool && schoolCount >= 4) {
+          const angle = (2 * Math.PI * (i % 6)) / Math.min(6, schoolCount);
+          const cr = 50;
+          const cx = Math.round(Math.cos(angle) * cr);
+          const cy = Math.round(Math.sin(angle) * cr * 0.55);
+          schoolX = [cx, cx + 5, cx - 5, cx + 3, cx - 3, cx + 2, cx - 2, cx];
+          schoolY = [cy, cy - 6, cy + 6, cy - 4, cy + 4, cy - 2, cy + 3, cy];
+        } else if (schoolFormScale !== 1) {
+          schoolX = style.movementX.map(x => Math.round(x * schoolFormScale));
+          schoolY = baseY.map(y => Math.round(y * schoolFormScale));
+        }
+      }
+
+    return { baseX, baseY, schoolX, schoolY };
+    });
+  }, [fishStyles, fishInTank, dynamicTemp, predatorNearSchool, tankMood, schoolCount]);
+
+  const fishAreaAnimate = useMemo(() => {
+    if (reduceEffects) return { scale: 1, x: 0, y: 0 };
+    if (cameraFocus) {
+      return { scale: cameraFocus.zoom, x: `${(50 - cameraFocus.x) * 0.04}%`, y: `${(48 - cameraFocus.y) * 0.04}%` };
+    }
+    if (deepNightMode) {
+      return { scale: 1.015, x: ["0%", "0.7%", "-0.4%", "0.3%", "0%"], y: ["0%", "0.45%", "-0.38%", "0.18%", "0%"], rotate: [0, 0.4, -0.3, 0.5, -0.2, 0] };
+    }
+    return { scale: 1, x: 0, y: 0 };
+  }, [reduceEffects, cameraFocus, deepNightMode]);
+
+  const fishAreaTransition = useMemo(() => {
+    if (reduceEffects) return { duration: 0 };
+    return cameraFocus || !deepNightMode
+      ? { duration: 1.2, ease: "easeInOut" }
+      : { duration: 22, repeat: Infinity, ease: "easeInOut" };
+  }, [reduceEffects, cameraFocus, deepNightMode]);
+
+  const fishAreaFilter = useMemo(() => {
+    if (reduceEffects) return undefined;
+    return deepNightMode
+      ? "saturate(1.15) hue-rotate(200deg) brightness(0.84)"
+      : tankMood === "calm"
+      ? "saturate(1.12) brightness(1.03)"
+      : tankMood === "stressed"
+        ? "saturate(0.93) brightness(0.99)"
+        : tankMood === "chaotic"
+          ? "saturate(0.90) brightness(0.97)"
+          : undefined;
+  }, [reduceEffects, deepNightMode, tankMood]);
+
+  const bokehSpecs = useMemo(
+    () => Array.from({ length: 8 }, (_, i) => ({
+      size: 60 + randRange(i * 11.7 + 1, 0, 80),
+      alpha: 0.02 + randRange(i * 7.9 + 2, 0, 0.04),
+      duration: 8 + randRange(i * 5.3 + 3, 0, 4),
+      left: 10 + i * 12,
+      top: 20 + (i % 3) * 25,
+    })),
+    [theme.id]
+  );
+
+  const algaeSpots = useMemo(
+    () => Array.from({ length: 8 }, (_, i) => ({
+      size: 40 + randRange(i * 9.1 + 4, 0, 60),
+      left: 10 + i * 12,
+      top: 20 + (i % 3) * 25,
+    })),
+    [theme.id]
+  );
+
+  const choirStars = useMemo(
+    () => Array.from({ length: 12 }, (_, k) => ({
+      top: 15 + randRange(k * 13.1 + 5, 0, 65),
+      left: 5 + randRange(k * 9.7 + 6, 0, 88),
+      duration: 1.2 + randRange(k * 4.7 + 7, 0, 1.5),
+      delay: randRange(k * 3.3 + 8, 0, 2),
+    })),
+    [theme.id]
+  );
+
   // Season colors
   const seasonColors = {
     spring: { hue: 120, saturation: 50, brightness: 55 },
@@ -1278,7 +1528,9 @@ export default function Aquarium() {
   const currentSeasonColor = seasonColors[season];
 
   return (
-    <div className="fixed inset-x-0 top-0 flex flex-col tank-container" style={{ bottom: 0 }}
+    <div
+      className="fixed inset-x-0 top-0 flex flex-col tank-container"
+      style={{ height: stableViewport.h ? `${stableViewport.h}px` : "100vh" }}
       onClick={handleTankTap}
       onMouseMove={(e) => {
         const rect = e.currentTarget.getBoundingClientRect();
@@ -1292,13 +1544,15 @@ export default function Aquarium() {
         const dt = Math.max(nowMs - fingerSpeedRef.current.t, 1);
         const spd = Math.sqrt(dx * dx + dy * dy) / dt * 100;
         fingerSpeedRef.current = { x: xPct, y: yPct, t: nowMs };
-        setFingerPos({ x: xPct, y: yPct });
-        if (spd < 2.8) {
-          if (followTimeoutRef.current) clearTimeout(followTimeoutRef.current);
-          setIsFollowActive(true);
-          followTimeoutRef.current = setTimeout(() => { setIsFollowActive(false); setFingerPos(null); }, 3200);
-        } else {
-          setIsFollowActive(false);
+        if (shouldUpdateFingerPos(xPct, yPct, nowMs)) {
+          setFingerPos({ x: xPct, y: yPct });
+          if (spd < 2.8) {
+            if (followTimeoutRef.current) clearTimeout(followTimeoutRef.current);
+            setIsFollowActive(true);
+            followTimeoutRef.current = setTimeout(() => { setIsFollowActive(false); setFingerPos(null); }, 3200);
+          } else {
+            setIsFollowActive(false);
+          }
         }
       }}
       onMouseDown={(e) => handleHoldStart(e.clientX, e.clientY, e.currentTarget.getBoundingClientRect())}
@@ -1317,13 +1571,15 @@ export default function Aquarium() {
         const dt = Math.max(nowMs - fingerSpeedRef.current.t, 1);
         const spd = Math.sqrt(dx * dx + dy * dy) / dt * 100;
         fingerSpeedRef.current = { x: xPct, y: yPct, t: nowMs };
-        setFingerPos({ x: xPct, y: yPct });
-        if (spd < 2.8) {
-          if (followTimeoutRef.current) clearTimeout(followTimeoutRef.current);
-          setIsFollowActive(true);
-          followTimeoutRef.current = setTimeout(() => { setIsFollowActive(false); setFingerPos(null); }, 3200);
-        } else {
-          setIsFollowActive(false);
+        if (shouldUpdateFingerPos(xPct, yPct, nowMs)) {
+          setFingerPos({ x: xPct, y: yPct });
+          if (spd < 2.8) {
+            if (followTimeoutRef.current) clearTimeout(followTimeoutRef.current);
+            setIsFollowActive(true);
+            followTimeoutRef.current = setTimeout(() => { setIsFollowActive(false); setFingerPos(null); }, 3200);
+          } else {
+            setIsFollowActive(false);
+          }
         }
       }}
       onTouchStart={(e) => {
@@ -1380,7 +1636,7 @@ export default function Aquarium() {
         />
       </div>
 
-      <Bubbles count={25} />
+      <Bubbles count={reduceEffects ? 10 : 25} />
 
       {/* ── NOUVEAUX COMPOSANTS ──────────────────────────────────────────── */}
       {/* Déchets organiques — augmentent si trop de poissons */}
@@ -1653,16 +1909,16 @@ export default function Aquarium() {
 
       {/* Bokeh effect - floating light particles */}
       <div className="absolute inset-0 pointer-events-none z-6 overflow-hidden">
-        {Array.from({ length: 8 }, (_, i) => (
+        {bokehSpecs.map((spec, i) => (
           <motion.div
             key={`bokeh-${i}`}
             className="absolute rounded-full blur-xl"
             style={{
-              width: 60 + Math.random() * 80,
-              height: 60 + Math.random() * 80,
-              background: `radial-gradient(circle, rgba(255,255,255,${0.02 + Math.random() * 0.04}) 0%, transparent 70%)`,
-              left: `${10 + i * 12}%`,
-              top: `${20 + (i % 3) * 25}%`,
+              width: spec.size,
+              height: spec.size,
+              background: `radial-gradient(circle, rgba(255,255,255,${spec.alpha}) 0%, transparent 70%)`,
+              left: `${spec.left}%`,
+              top: `${spec.top}%`,
             }}
             animate={{
               y: [-20, 20, -20],
@@ -1671,7 +1927,7 @@ export default function Aquarium() {
               opacity: [0.3, 0.6, 0.3],
             }}
             transition={{
-              duration: 8 + Math.random() * 4,
+              duration: spec.duration,
               delay: i * 0.5,
               repeat: Infinity,
               ease: "easeInOut",
@@ -1709,15 +1965,15 @@ export default function Aquarium() {
             }}
           >
             {/* Algae spots appearing on screen */}
-            {Array.from({ length: 8 }, (_, i) => (
+            {algaeSpots.map((spot, i) => (
               <motion.div
                 key={i}
                 className="absolute rounded-full"
                 style={{
-                  width: 40 + Math.random() * 60,
-                  height: 40 + Math.random() * 60,
-                  left: `${10 + i * 12}%`,
-                  top: `${20 + (i % 3) * 25}%`,
+                  width: spot.size,
+                  height: spot.size,
+                  left: `${spot.left}%`,
+                  top: `${spot.top}%`,
                   background: `radial-gradient(circle, rgba(34, 139, 34, ${0.3 + waterQuality.nitrates * 0.015}) 0%, transparent 70%)`,
                   filter: "blur(15px)",
                 }}
@@ -1752,16 +2008,16 @@ export default function Aquarium() {
       <WeatherEffects type={weather} />
 
       {/* Parallax depth layers */}
-      <ParallaxLayers />
+      {!reduceEffects && <ParallaxLayers />}
 
       {/* Bokeh background effect */}
-      <BokehEffect />
+      {!reduceEffects && <BokehEffect />}
 
       {/* Light rays from surface */}
-      <LightRays count={6} intensity={lightIntensity} isNight={isNightMode} moonPhase={lunarPhase} />
+      {!reduceEffects && <LightRays count={6} intensity={lightIntensity} isNight={isNightMode} moonPhase={lunarPhase} />}
 
       {/* Surface reflections and caustics */}
-      <SurfaceReflections />
+      {!reduceEffects && <SurfaceReflections />}
 
       {/* Ambient music system */}
       <AmbientMusic theme={theme.id} volume={soundEnabled ? (isAbyssalBiome ? 0.006 : deepNightMode ? 0.018 : asrmMode ? 0.003 : 0.05) : 0} season={season} tankMood={tankMood} />
@@ -1770,7 +2026,7 @@ export default function Aquarium() {
       <FishSounds
         fishCount={fishInTank.length}
         volume={soundEnabled ? (asrmMode ? 0.003 : 0.03) : 0}
-        fishXPositions={Object.values(fishPositions).map(p => p.x)}
+        fishXPositions={fishXPositions}
       />
 
       {/* ASMR mode enhanced sounds */}
@@ -2106,12 +2362,12 @@ export default function Aquarium() {
               );
             })}
             {/* Étoiles scintillantes */}
-            {[...Array(12)].map((_, k) => (
+            {choirStars.map((star, k) => (
               <motion.div key={`star-cho-${k}`} className="absolute rounded-full pointer-events-none"
-                style={{ width: 3, height: 3, top: `${15 + Math.random() * 65}%`, left: `${5 + Math.random() * 88}%`,
+                style={{ width: 3, height: 3, top: `${star.top}%`, left: `${star.left}%`,
                   background: "white", filter: "blur(0.5px)" }}
                 animate={{ opacity: [0, 1, 0], scale: [0.5, 1.5, 0.5] }}
-                transition={{ duration: 1.2 + Math.random() * 1.5, repeat: Infinity, delay: Math.random() * 2 }}
+                transition={{ duration: star.duration, repeat: Infinity, delay: star.delay }}
               />
             ))}
             <motion.div className="absolute bottom-[18%] left-1/2 -translate-x-1/2 text-lg font-bold text-cyan-200 tracking-widest pointer-events-none"
@@ -2803,16 +3059,11 @@ export default function Aquarium() {
       </AnimatePresence>
 
       {/* UI layer */}
-      <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.5 }}
-            className="relative z-20 pointer-events-none flex-shrink-0 w-full"
-          >
+      <div className="relative z-20 pointer-events-none flex-shrink-0 w-full">
             {/* Top bar header */}
             <div className="relative z-20 px-5 pt-6 pb-3 pointer-events-auto">
-              <div className="glass-nav rounded-2xl px-4 py-3 flex items-center justify-between">
+              <div className="glass-nav rounded-2xl px-4 py-3">
+                <div className="flex items-center justify-between">
                 <div className="flex-1">
                   <p className="text-[11px] text-foreground/50 font-medium">Bonjour, {userName} 👋</p>
                   <button 
@@ -2846,15 +3097,10 @@ export default function Aquarium() {
                     className="text-foreground/50 hover:text-foreground transition-colors text-base"
                   >⚙️</button>
                 </div>
-              </div>
+                </div>
 
-              {/* All widgets in one horizontal line */}
-              <motion.div 
-                className="glass-nav rounded-2xl px-3 py-2 mt-3 flex items-center justify-between gap-2"
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3 }}
-              >
+                {/* All widgets in one horizontal line */}
+                <div className="mt-3 pt-3 border-t border-foreground/10 flex items-center justify-between gap-2">
                 {/* Temperature */}
                 <div className="flex items-center gap-1.5">
                   <div className="w-1 h-8 rounded-full bg-gradient-to-t from-red-500 via-orange-400 to-blue-400 relative overflow-hidden">
@@ -2962,7 +3208,8 @@ export default function Aquarium() {
                     <p className="text-[8px] text-foreground/40 mt-0.5">{fishInTank.length}/{MAX_FISH_PER_AQUARIUM}🐟</p>
                   </div>
                 </div>
-              </motion.div>
+                </div>
+              </div>
             </div>
 
             {/* Welcome message */}
@@ -2980,19 +3227,16 @@ export default function Aquarium() {
                 </motion.div>
               )}
             </AnimatePresence>
-          </motion.div>
+          </div>
 
           {/* Aquarium rank & score badge — tap to expand breakdown */}
           <motion.div className="relative z-20 px-5 mb-1 pointer-events-auto"
             animate={{ opacity: deepNightMode ? 0 : 1 }}
             transition={{ duration: 2 }}
           >
-            <motion.button
+          <motion.button
               className="w-full glass-nav rounded-xl px-3 py-1.5 flex items-center justify-between"
               onClick={() => setShowScoreBreakdown(v => !v)}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.8 }}
             >
               <span className="text-[10px] text-foreground/60 font-medium">{aquariumRank}</span>
               <div className="flex items-center gap-1">
@@ -3046,30 +3290,10 @@ export default function Aquarium() {
           </motion.div>
 
       {/* Fish swimming area */}
-      <motion.div className="fish-swimming-area gpu-layer relative z-10 flex-1 overflow-hidden min-h-0"
-        animate={
-          cameraFocus
-            ? { scale: cameraFocus.zoom, x: `${(50 - cameraFocus.x) * 0.04}%`, y: `${(48 - cameraFocus.y) * 0.04}%` }
-            : deepNightMode
-              ? { scale: 1.015, x: ['0%', '0.7%', '-0.4%', '0.3%', '0%'], y: ['0%', '0.45%', '-0.38%', '0.18%', '0%'], rotate: [0, 0.4, -0.3, 0.5, -0.2, 0] }
-              : { scale: 1, x: 0, y: 0 }
-        }
-        transition={
-          cameraFocus || !deepNightMode
-            ? { duration: 1.2, ease: "easeInOut" }
-            : { duration: 22, repeat: Infinity, ease: "easeInOut" }
-        }
-        style={{
-          filter: deepNightMode
-            ? "saturate(1.15) hue-rotate(200deg) brightness(0.84)"
-            : tankMood === "calm"
-            ? "saturate(1.12) brightness(1.03)"
-            : tankMood === "stressed"
-              ? "saturate(0.93) brightness(0.99)"
-              : tankMood === "chaotic"
-                ? "saturate(0.90) brightness(0.97)"
-                : undefined,
-        }}
+      <motion.div className={`fish-swimming-area ${reduceEffects ? "" : "gpu-layer"} relative z-10 flex-1 overflow-hidden min-h-0`}
+        animate={fishAreaAnimate}
+        transition={fishAreaTransition}
+        style={{ filter: fishAreaFilter }}
       >
 
         {/* === Aquarium decorations inside bounded fish area === */}
@@ -3253,13 +3477,12 @@ export default function Aquarium() {
         )}
 
         {/* 🐠 Ballet bioluminescent collectif — 3+ poissons pulsent en phase */}
-        {bioCollectivePulse > 0 && bioFishCount >= 3 && isNightMode && (
+        {showBioCollectivePulse && (
           <motion.div
-            key={`sync-${bioCollectivePulse}`}
             className="absolute inset-0 pointer-events-none z-[3]"
             initial={{ opacity: 0 }}
             animate={{ opacity: [0, 0.08, 0.03, 0.08, 0] }}
-            transition={{ duration: 2.5, ease: "easeInOut" }}
+            transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut" }}
             style={{
               background: "radial-gradient(ellipse at 50% 50%, hsla(185,100%,65%,0.35) 0%, hsla(210,100%,55%,0.1) 50%, transparent 75%)",
               mixBlendMode: "screen",
@@ -3486,25 +3709,17 @@ export default function Aquarium() {
           <div className="w-full h-full" style={{ background: 'linear-gradient(to right, transparent 0%, rgba(100,200,255,0.6) 20%, rgba(150,230,255,0.8) 50%, rgba(100,200,255,0.6) 80%, transparent 100%)', filter: 'blur(2px)' }} />
         </motion.div>
 
-        {/* Sand particles triggered by fish near bottom */}
-        <SandParticles 
-          fishPositions={Object.entries(fishPositions).map(([id, pos]) => ({
-            x: pos.x,
-            y: pos.y,
-            active: pos.y > 70,
-          }))}
-        />
-
-        {/* Shrimp prey system for carnivorous fish */}
-        <ShrimpPrey 
-          carnivorePositions={carnivorePositions}
+        <FishDynamics
+          fishInTank={fishInTank}
+          getFishStyle={getFishStyle}
           nitrateLevel={waterQuality.nitrates}
           onShrimpCaught={() => {
             // Shrimps eat waste, reducing nitrates in the food chain
-            setWaterQuality(prev => ({
-              ...prev,
-              nitrates: Math.max(0, prev.nitrates - 0.5),
-            }));
+            setWaterQuality(prev => {
+              const nextNitrates = Math.max(0, prev.nitrates - 0.5);
+              if (nextNitrates === prev.nitrates) return prev;
+              return { ...prev, nitrates: nextNitrates };
+            });
           }}
         />
 
@@ -3512,7 +3727,6 @@ export default function Aquarium() {
         <FishGames 
           fishCount={fishInTank.length}
           fishData={fishInTank.length > 0 ? fishInTank : FISH_CATALOG.slice(0, 8)}
-          fishPositions={fishPositions}
         />
 
         {/* Companion fish - always present */}
@@ -3626,38 +3840,16 @@ export default function Aquarium() {
             ? (feedingTargetX > 0 ? 1 : feedingTargetX < 0 ? -1 : (fishDirections.current[i] ?? 1))
             : (fishDirections.current[i] ?? style.scaleX);
 
-          // 🌡 Thermal migration nudge: warm-water fish surface when hot, cold-water fish sink when cold
-          const fishTempStr = fish?.temperature ?? "";
-          const isWarmFish = /2[4-9]|30/.test(fishTempStr);
-          const isColdFish = /1[6-9]|2[0-1]/.test(fishTempStr);
-          const thermalNudge = (!feedingActive && !followMouse)
-            ? (isWarmFish && dynamicTemp > 26 ? -14 :
-               isWarmFish && dynamicTemp < 22 ?  12 :
-               isColdFish && dynamicTemp < 22 ? -12 :
-               isColdFish && dynamicTemp > 26 ?  14 : 0)
-            : 0;
-
-          // 🐟 Intelligence collective: schooling formation adapts near predators
+          const motionData = fishMotion[i] ?? {
+            baseX: style.movementX,
+            baseY: style.movementY,
+            schoolX: style.movementX,
+            schoolY: style.movementY,
+          };
           const isSchoolingFish = fish?.behavior === "schooling";
-          const schoolCount = fishInTank.filter(f => f?.behavior === "schooling").length;
-          const defensiveCircle = isSchoolingFish && predatorNearSchool && schoolCount >= 4;
-          const schoolFormScale = predatorNearSchool ? 0.4 : tankMood === "calm" ? 1.22 : 1.0;
-
-          let effectiveMovX = style.movementX;
-          let effectiveMovY = style.movementY.map(y => y + thermalNudge);
-          if (isSchoolingFish && !feedingActive && !followMouse && !isBaby) {
-            if (defensiveCircle) {
-              const angle = (2 * Math.PI * (i % 6)) / Math.min(6, schoolCount);
-              const cr = 50;
-              const cx = Math.round(Math.cos(angle) * cr);
-              const cy = Math.round(Math.sin(angle) * cr * 0.55);
-              effectiveMovX = [cx, cx+5, cx-5, cx+3, cx-3, cx+2, cx-2, cx];
-              effectiveMovY = [cy, cy-6, cy+6, cy-4, cy+4, cy-2, cy+3, cy];
-            } else {
-              effectiveMovX = style.movementX.map(x => Math.round(x * schoolFormScale));
-              effectiveMovY = style.movementY.map(y => Math.round(y * schoolFormScale + thermalNudge));
-            }
-          }
+          const useSchoolMotion = isSchoolingFish && !feedingActive && !followMouse && !isBaby;
+          const effectiveMovX = useSchoolMotion ? motionData.schoolX : motionData.baseX;
+          const effectiveMovY = useSchoolMotion ? motionData.schoolY : motionData.baseY;
 
           // 👁️ Regard dynamique: subtle eye shift toward food > cursor > dominant
           let gazeX = 0; // 1=toward head/forward, -1=backward, 0=neutral

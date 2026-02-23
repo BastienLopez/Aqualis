@@ -59,9 +59,7 @@ function AnimatedCorals({ nitrateLevel = 0, daysSinceInstall = 0 }: Props) {
               height: "100%",
               background: `linear-gradient(to top, ${coral.color}, transparent)`,
             }}
-            animate={{
-              scaleX: [1, 1.1, 1],
-            }}
+            animate={{ scaleX: [1, 1.1, 1] }}
             transition={{
               duration: 2,
               repeat: Infinity,

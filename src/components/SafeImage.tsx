@@ -21,12 +21,23 @@ export default function SafeImage({
   const [error, setError] = useState(false);
   const resolvedSrc = useMemo(() => pickImageSrc(src, mobileSrc), [src, mobileSrc]);
   const cacheStatus = useCachedImage(resolvedSrc, { priority });
+  const [lastLoadedSrc, setLastLoadedSrc] = useState<string | null>(() => (cacheStatus === "loaded" ? resolvedSrc || null : null));
 
   useEffect(() => {
     setError(false);
   }, [resolvedSrc]);
 
-  if (!resolvedSrc || error || cacheStatus === "error") {
+  useEffect(() => {
+    if (cacheStatus === "loaded" && resolvedSrc) {
+      setLastLoadedSrc(resolvedSrc);
+    }
+    if (cacheStatus === "error") {
+      // keep lastLoadedSrc around as a graceful fallback; don't wipe it immediately
+    }
+  }, [cacheStatus, resolvedSrc]);
+
+  // If there's no resolved src or an unrecoverable error and no previously loaded image, show skeleton
+  if (!resolvedSrc || error || (cacheStatus === "error" && !lastLoadedSrc)) {
     return (
       <div
         aria-hidden
@@ -35,9 +46,12 @@ export default function SafeImage({
     );
   }
 
+  // While a new src is loading, prefer to keep rendering the last successfully loaded image
+  const displaySrc = cacheStatus === "loaded" ? resolvedSrc : (lastLoadedSrc || resolvedSrc);
+
   return (
     <img
-      src={resolvedSrc}
+      src={displaySrc}
       alt={alt}
       className={className}
       loading={priority === "high" ? "eager" : "lazy"}

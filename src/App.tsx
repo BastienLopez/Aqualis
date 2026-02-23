@@ -4,7 +4,6 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
 import { GameProvider } from "@/contexts/GameContext";
-import ImagePreloader from "@/components/ImagePreloader";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Index from "./pages/Index";
 import BottomNav from "./components/BottomNav";
@@ -42,17 +41,19 @@ function AppLayout() {
     <>
       <ErrorBoundary>
         <Suspense fallback={<PageSkeleton />}>
-          <Routes>
-            <Route path="/" element={<Index />} />
-            <Route path="/onboarding" element={<Onboarding />} />
-            <Route path="/aquarium" element={<Aquarium />} />
-            <Route path="/session" element={<Session />} />
-            <Route path="/shop" element={<Shop />} />
-            <Route path="/collection" element={<Collection />} />
-            <Route path="/encyclopedia" element={<Encyclopedia />} />
-            <Route path="/quests" element={<Quests />} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
+          <div id="page-scroll">
+            <Routes>
+              <Route path="/" element={<Index />} />
+              <Route path="/onboarding" element={<Onboarding />} />
+              <Route path="/aquarium" element={<Aquarium />} />
+              <Route path="/session" element={<Session />} />
+              <Route path="/shop" element={<Shop />} />
+              <Route path="/collection" element={<Collection />} />
+              <Route path="/encyclopedia" element={<Encyclopedia />} />
+              <Route path="/quests" element={<Quests />} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </div>
         </Suspense>
       </ErrorBoundary>
       {showNav && <BottomNav />}
@@ -65,7 +66,6 @@ const App = () => (
     <TooltipProvider>
       <Sonner />
       <GameProvider>
-        <ImagePreloader />
         <BrowserRouter basename={import.meta.env.BASE_URL}>
           <AppLayout />
         </BrowserRouter>

@@ -79,6 +79,50 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
+
+}
+
+/* ── Force mobile layout on desktop browsers (unlayered = highest priority) ── */
+html {
+  background-color: #000 !important;
+}
+
+body {
+  background-color: #000 !important;
+  display: flex !important;
+  justify-content: center !important;
+  min-height: 100dvh;
+}
+
+#root {
+  width: 100% !important;
+  max-width: 430px !important;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+  background-color: hsl(var(--background)) !important;
+  box-shadow: 0 0 80px rgba(0, 0, 0, 0.9);
+  /* Makes #root the containing block for fixed children (Aquarium/Session) */
+  transform: translateZ(0);
+  isolation: isolate;
+}
+
+/* Scrollable page content — all pages scroll inside this, not body */
+#page-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+#page-scroll::-webkit-scrollbar { display: none; }
+
+html, body {
+  overflow: hidden !important;
+  height: 100dvh !important;
 }
 
 @layer utilities {
@@ -145,6 +189,7 @@
     /* Prevent browser from repainting entire page on fish movement */
     isolation: isolate;
   }
+
 
   /* Animated overlays: GPU layer, no reflow impact */
   .gpu-layer {

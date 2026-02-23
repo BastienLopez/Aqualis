@@ -52,13 +52,19 @@ export default function Collection() {
   const selectedCountInAquarium = selectedFish
     ? fishInCurrentAquarium.filter(id => id === selectedFish.id).length
     : 0;
+  const selectedOwnedCount = selectedFish
+    ? ownedFishIds.filter(id => id === selectedFish.id).length
+    : 0;
   const assignLabel = selectedCountInAquarium > 0
-    ? `Ajouter encore (${selectedCountInAquarium} déjà présent${selectedCountInAquarium > 1 ? 's' : ''})`
+    ? `Ajouter encore (${selectedCountInAquarium}/${selectedOwnedCount} déjà présent${selectedCountInAquarium > 1 ? 's' : ''})`
     : `Ajouter à ${currentTheme?.name ?? "cet aquarium"}`;
   const assignMeta = infiniteMode
     ? `${currentTheme?.name ?? "Aquarium"} · ${currentCount} poissons (∞)`
     : `${currentTheme?.name ?? "Aquarium"} · ${currentCount}/${MAX_FISH_PER_AQUARIUM}`;
-  const assignDisabled = !infiniteMode && currentCount >= MAX_FISH_PER_AQUARIUM;
+  const assignDisabled = !infiniteMode && (
+    currentCount >= MAX_FISH_PER_AQUARIUM ||
+    (selectedFish !== null && selectedCountInAquarium >= selectedOwnedCount)
+  );
 
   const fishInstances = allFishInstances.filter(instance => ownedFishIds.includes(instance.fishId));
   const adultFemales = fishInstances.filter(f => f.gender === "female" && !f.isBaby && f.age >= 7);
@@ -79,6 +85,14 @@ export default function Collection() {
     // Always ADD — never toggle-remove (user can have multiple of same fish)
     if (!infiniteMode && currentCount >= MAX_FISH_PER_AQUARIUM) {
       toast.error(`Aquarium plein ! (${MAX_FISH_PER_AQUARIUM} max)`);
+      setSelectedFish(null);
+      return;
+    }
+    // Limit per-species: cannot add more copies than owned
+    const ownedCount = ownedFishIds.filter(id => id === fish.id).length;
+    const alreadyInAquarium = fishInCurrentAquarium.filter(id => id === fish.id).length;
+    if (!infiniteMode && alreadyInAquarium >= ownedCount) {
+      toast.error(`Tu ne possèdes que ${ownedCount} ${fish.name}. Achètes-en d'autres pour en ajouter plus !`);
       setSelectedFish(null);
       return;
     }

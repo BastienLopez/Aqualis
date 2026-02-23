@@ -29,18 +29,15 @@ export default function BottomNav() {
 
   return (
     <div
-      className="fixed bottom-[5px] left-0 right-0 z-50 pb-safe"
+      className="w-full z-50 pb-safe flex-shrink-0"
       style={isAquarium ? {} : {
         backdropFilter: 'blur(16px)',
         WebkitBackdropFilter: 'blur(16px)',
         background: 'rgba(8,18,28,0.60)',
         borderTop: '1px solid rgba(255,255,255,0.06)',
-        borderRadius: '28px',
-        marginLeft: '20px',
-        marginRight: '20px',
       }}
     >
-      <div className="mx-auto max-w-lg px-2 pb-2">
+      <div className="px-5 pb-2">
         <div className="rounded-[28px] flex items-center justify-evenly py-2 px-1" style={{ background: 'transparent' }}>
           {tabs.map((tab) => {
             const isActive = location.pathname === tab.path;

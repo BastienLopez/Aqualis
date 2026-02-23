@@ -173,7 +173,7 @@ export default function Session() {
       />
       <Bubbles count={phase === "running" ? 4 : 8} />
 
-      <div className="relative z-10 flex-1 flex flex-col px-5 pt-14 pb-28 overflow-y-auto">
+            <div className="relative z-10 flex-1 flex flex-col px-5 pt-14 pb-28 min-h-0 overflow-y-auto">
         <AnimatePresence mode="wait">
 
           {phase === "setup" && (

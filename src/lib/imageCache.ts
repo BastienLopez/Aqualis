@@ -32,9 +32,18 @@ export const shouldUseMobileAssets = () => {
   return window.matchMedia("(max-width: 640px)").matches || reduceData;
 };
 
+let cachedMobilePreference: boolean | null = null;
+
+export const getMobileAssetPreference = () => {
+  if (cachedMobilePreference === null) {
+    cachedMobilePreference = shouldUseMobileAssets();
+  }
+  return cachedMobilePreference;
+};
+
 export const pickImageSrc = (src?: string, mobileSrc?: string) => {
   if (!src) return src;
-  return shouldUseMobileAssets() && mobileSrc ? mobileSrc : src;
+  return getMobileAssetPreference() && mobileSrc ? mobileSrc : src;
 };
 
 const trimCache = () => {

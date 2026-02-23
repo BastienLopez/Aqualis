@@ -215,5 +215,5 @@ export default function FishDetail({
   );
 
   if (typeof document === "undefined") return content;
-  return createPortal(content, document.body);
+  return createPortal(content, document.getElementById('root') ?? document.body);
 }

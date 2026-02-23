@@ -1,3 +1,7 @@
-﻿<resources>
-    <string name="app_name">Aquarium</string>
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Aqualis</string>
+    <string name="title_activity_main">Aqualis</string>
+    <string name="package_name">com.aquarium.premium</string>
+    <string name="custom_url_scheme">com.aquarium.premium</string>
 </resources>

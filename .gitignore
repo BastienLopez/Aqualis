@@ -28,7 +28,6 @@ android/.tmp/
 android/build/
 android/app/build/
 android/local.properties
-*.apk
 *.aab
 
 # Secrets — never commit

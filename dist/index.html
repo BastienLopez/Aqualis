@@ -2,6 +2,22 @@
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
+    <!-- GitHub Pages SPA: restore path encoded by 404.html -->
+    <script>
+      (function(l) {
+        if (l.search[1] === '/') {
+          var decoded = l.search.slice(1).split('&').map(function(s) { return s.replace(/~and~/g, '&'); });
+          window.history.replaceState(null, null,
+            l.pathname.slice(0, -1) + decoded[0] +
+            (decoded[1] ? '?' + decoded[1] : '') +
+            l.hash
+          );
+        }
+      }(window.location));
+    </script>
+    <!-- Content Security Policy -->
+    <meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; font-src 'self' https://fonts.gstatic.com; frame-ancestors 'none';" />
     <!-- Mobile viewport: prevent zoom, fill notch, GPU-composited scroll -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Aqualis</title>
@@ -20,16 +36,16 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 
     <!-- Favicons -->
-    <link rel="icon" type="image/png" sizes="32x32" href="/aquarium_apk/favicon-32x32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/aquarium_apk/favicon-16x16.png" />
-    <link rel="icon" href="/aquarium_apk/favicon.ico" />
-    <link rel="manifest" href="/aquarium_apk/manifest.webmanifest" />
-    <script type="module" crossorigin src="/aquarium_apk/assets/index-Bu5wvqaW.js"></script>
-    <link rel="modulepreload" crossorigin href="/aquarium_apk/assets/vendor-utils-D4Tqk0JD.js">
-    <link rel="modulepreload" crossorigin href="/aquarium_apk/assets/vendor-react-CptJiUpV.js">
-    <link rel="modulepreload" crossorigin href="/aquarium_apk/assets/vendor-radix-CQTFrWjr.js">
-    <link rel="modulepreload" crossorigin href="/aquarium_apk/assets/vendor-motion-DegIOVy1.js">
-    <link rel="stylesheet" crossorigin href="/aquarium_apk/assets/index-DFYPD5QO.css">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="icon" href="/favicon.ico" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <script type="module" crossorigin src="/assets/index-Esl2xJZB.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/vendor-utils-D4Tqk0JD.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-react-sqbOGXRP.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-radix-B_H_QjQS.js">
+    <link rel="modulepreload" crossorigin href="/assets/vendor-motion-DegIOVy1.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-x-NhQqOh.css">
   </head>
 
   <body>
